@@ -10,6 +10,50 @@ This is the backend server for the WhatsApp Dashboard application with PostgreSQ
 - **Database**: PostgreSQL with automatic migrations
 - **API Documentation**: Swagger/OpenAPI documentation
 
+## New Features Added
+
+### 🧪 Test Message Endpoint
+- `POST /api/interakt/test-message` - Send test template messages (matches Facebook Graph API format)
+- Perfect for testing with your number (7447340010) and verifying API functionality
+
+### 🔗 Webhook Support
+- `GET /api/interakt/webhook` - Facebook webhook verification (hub.challenge)
+- `POST /api/interakt/webhook` - Receive message status updates and incoming messages
+
+## Environment Variables
+
+```bash
+# Required for real WhatsApp sending
+INTERAKT_BASE_URL=https://amped-express.interakt.ai/api/v17.0
+INTERAKT_WABA_ID=your_waba_id
+INTERAKT_ACCESS_TOKEN=your_access_token
+INTERAKT_PHONE_NUMBER_ID=your_phone_number_id
+
+# Webhook verification
+WEBHOOK_VERIFY_TOKEN=your_webhook_token
+
+# Fallback behavior
+USE_FALLBACK_WHEN_ERROR=true
+```
+
+## Quick Test
+
+1. **Test Template Message**:
+   ```bash
+   curl -X POST http://localhost:4000/api/interakt/test-message \
+     -H "Content-Type: application/json" \
+     -d '{
+       "to": "7447340010",
+       "template_name": "hello_world",
+       "language_code": "en_US"
+     }'
+   ```
+
+2. **Webhook Verification**:
+   ```bash
+   curl "http://localhost:4000/api/interakt/webhook?hub.mode=subscribe&hub.verify_token=YOUR_TOKEN&hub.challenge=CHALLENGE_STRING"
+   ```
+
 ## Database Setup
 
 ### Prerequisites
@@ -67,6 +111,14 @@ postgresql://postgres:newpassword@localhost:5432/whatsapp_dashbaord
 - `GET /api/interakt/templates` - Get message templates
 - `POST /api/interakt/templates` - Create new template
 - `POST /api/interakt/messages` - Send template message
+- `POST /api/interakt/test-message` - **NEW**: Test template message (Facebook Graph API format)
+- `GET /api/interakt/webhook` - **NEW**: Webhook verification
+- `POST /api/interakt/webhook` - **NEW**: Receive webhook updates
+
+### Campaigns API
+
+- `POST /api/campaigns` - Create campaign
+- `POST /api/campaigns/send-template` - Send template to multiple contacts
 
 ## Contact Schema
 
