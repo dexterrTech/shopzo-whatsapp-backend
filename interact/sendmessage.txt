@@ -1,0 +1,589 @@
+Send Message
+Use the POST WhatsApp Business Phone Number > Messages endpoint to send free-form messages to customers:
+
+Properties
+Placeholder	Description	Sample Value
+String	The WhatsApp ID or phone number of the customer to send the message to. See Phone Number Formats	+16315551234
+String	Indicates message type.	text
+Object	Text messages contents.	See Text Messages.
+Object	Reaction message contents.	See Reaction Messages
+Object	Media message contents. The property name should match the type of media message you are sending (image for an image message, video for a video message, etc.).	See Media Messages.
+Object	Location message contents.	See Location Messages
+Object	Contacts message contents.	See Contacts Messages.
+Object	Interactive message contents.	See Interactive Messages.
+
+The examples throughout this document describe the post body payload requirements for each of the free-form message types.
+
+POST
+Send Session Text Message
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/messages
+To send a text message, make a POST call to /PHONE_NUMBER_ID/messages and attach a message object with type=text. Then, add a text object.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+
+{
+      "messaging_product": "whatsapp",
+      "recipient_type": "individual",
+      "to": "+919999595313",
+      "type": "text",
+      "text": {
+        "preview_url": false,
+        "body": "This is a test"
+        }
+    }
+
+    curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/messages' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+      "messaging_product": "whatsapp",
+      "recipient_type": "individual",
+      "to": "+919999595313",
+      "type": "text",
+      "text": {
+        "preview_url": false,
+        "body": "This is a test"
+        }
+    }'
+
+    {
+  "messaging_product": "whatsapp",
+  "contacts": [
+    {
+      "input": "+919999595313",
+      "wa_id": "919999595313"
+    }
+  ],
+  "messages": [
+    {
+      "id": "wamid.HBgMOTE5OTk5NTk1MzEzFQIAERgSQUMwM0Y5RjNEMjIwQTFEMEE5AA=="
+    }
+  ]
+}
+POST
+Send Media Message
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/messages
+Use the POST WhatsApp Business Phone Number > Messages endpoint to send a media message. Use the type property to indicate the media asset's type (audio, document, image, sticker, or video) and either the id or link property to indicate its ID (which you must generate) or location on your public server.
+
+If using id, you must first upload your media asset to our servers and capture the returned media ID. If using link, your asset must be on a publicly accessible server or the message will fail to send.
+
+To reduce the likelihood of errors and avoid unnecessary requests to your public server, we recommend that you upload your media assets and use their IDs when sending messages.
+
+Media assets can also be cached. See Media HTTP Caching.
+
+Sample request using image with link:
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/messages' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+  "messaging_product": "whatsapp",
+  "recipient_type": "individual",
+  "to": "PHONE-NUMBER",
+  "type": "image",
+  "image": {
+    "id" : "MEDIA-OBJECT-ID"
+  }
+}'
+
+{
+  "messaging_product": "whatsapp",
+  "contacts": [
+    {
+      "input": "+919999595313",
+      "wa_id": "919999595313"
+    }
+  ],
+  "messages": [
+    {
+      "id": "wamid.HBgMOTE5OTk5NTk1MzEzFQIAERgSQUMwM0Y5RjNEMjIwQTFEMEE5AA=="
+    }
+  ]
+}
+
+{
+  "messaging_product": "whatsapp",
+  "recipient_type": "individual",
+  "to": "PHONE-NUMBER",
+  "type": "image",
+  "image": {
+    "id" : "MEDIA-OBJECT-ID"
+  }
+}
+POST
+Send Catalog Message
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/messages
+You must have inventory uploaded to Meta in an ecommerce catalog connected to your WhatsApp Business Account.
+
+Use the WhatsApp Business Phone Number > Messages endpoint to send a catalog template message using a catalog template with an APPROVED status.
+POST /<WHATSAPP_BUSINESS_PHONE_NUMBER_ID>/messages
+
+Table
+Placeholder	Description	Sample Value
+String	Required.
+
+
+
+Text to appear in the message body.
+
+
+
+Maximum 1024 characters.	Hello! Thanks for your interest. Ordering is easy. Just visit our catalog and add items to purchase.
+String	Optional.
+
+
+
+Text to appear in the message footer.
+
+
+
+Maximum 60 characters.	Best grocery deals on WhatsApp!
+String	Optional.
+
+
+
+Item SKU number. Labeled as Content ID in the Commerce Manager.
+
+
+
+The thumbnail of this item will be used as the message's header image.
+
+
+
+If the parameters object is omitted, the product image of the first item in your catalog will be used.	2lc20305pt
+String	Customer phone number.	+16505551234
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+
+{
+  "messaging_product": "whatsapp",
+  "recipient_type": "individual",
+  "to": "PHONE_NUMBER",
+  "type": "interactive",
+  "interactive" : {
+    "type" : "catalog_message",
+    "body" : {
+      "text": "Thanks for your order! Tell us what address you’d like this order delivered to."
+    },
+    "action": {
+      "name": "catalog_message",
+      "parameters": { 
+        "thumbnail_product_retailer_id": "<Product-retailer-id>"
+      }
+    }
+  }
+}
+curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/messages' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+  "messaging_product": "whatsapp",
+  "recipient_type": "individual",
+  "to": "PHONE_NUMBER",
+  "type": "interactive",
+  "interactive" : {
+    "type" : "catalog_message",
+    "body" : {
+      "text": "Thanks for your order! Tell us what address you’d like this order delivered to."
+    },
+    "action": {
+      "name": "catalog_message",
+      "parameters": { 
+        "thumbnail_product_retailer_id": "<Product-retailer-id>"
+      }
+    }
+  }
+}'
+
+{
+  "messaging_product": "whatsapp",
+  "contacts": [
+    {
+      "input": "+919999595313",
+      "wa_id": "919999595313"
+    }
+  ],
+  "messages": [
+    {
+      "id": "wamid.HBgMOTE5OTk5NTk1MzEzFQIAERgSQUMwM0Y5RjNEMjIwQTFEMEE5AA=="
+    }
+  ]
+}
+
+POST
+Send Single Product Message
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NO_ID/messages
+Single-Product Messages
+To send a Single-Product Message, assemble an interactive object of type product with the following components:
+
+Required Components	Optional Components
+- Action Object — Must include both catalog_id and product_retailer_id.	- Body Object
+
+- Footer Object
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+{
+   "messaging_product": "whatsapp",
+   "recipient_type": "individual",
+   "to": "PHONE_NUMBER",
+   "type": "interactive",
+   "interactive": {
+     "type": "product",
+     "body": {
+       "text": "optional body text"
+     },
+     "footer": {
+       "text": "optional footer text"
+     },
+     "action": {
+       "catalog_id": "CATALOG_ID",
+       "product_retailer_id": "ID_TEST_ITEM_1"
+     }
+   }
+ }
+ curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/messages' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+   "messaging_product": "whatsapp",
+   "recipient_type": "individual",
+   "to": "PHONE_NUMBER",
+   "type": "interactive",
+   "interactive": {
+     "type": "product",
+     "body": {
+       "text": "optional body text"
+     },
+     "footer": {
+       "text": "optional footer text"
+     },
+     "action": {
+       "catalog_id": "CATALOG_ID",
+       "product_retailer_id": "ID_TEST_ITEM_1"
+     }
+   }
+ }'
+
+ {
+  "messaging_product": "whatsapp",
+  "contacts": [
+    {
+      "input": "+919999595313",
+      "wa_id": "919999595313"
+    }
+  ],
+  "messages": [
+    {
+      "id": "wamid.HBgMOTE5OTk5NTk1MzEzFQIAERgSQUMwM0Y5RjNEMjIwQTFEMEE5AA=="
+    }
+  ]
+}
+
+POST
+Send Multi-Product Message
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/messages
+Multi-Product Messages
+To send a Multi-Product Message, assemble an interactive object of type product_list with the following components:
+
+Required Components	Optional Components
+- Header Object — Header’s type must be set to text. Remember to add a text object with the desired content.
+
+- Body Object
+
+- Action Object - Must include catalog_id and sections.
+
+- Sections must be an array of objects describing each section using title and product_items.
+
+- Each section's product_items value must be an array describing each product in the section using product_retailer_id and the product's SKU number.	- Footer Object
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+{
+ "messaging_product": "whatsapp",
+   "recipient_type": "individual",
+   "to": "PHONE_NUMBER",
+   "type": "interactive",
+   "interactive": {
+     "type": "product_list",
+     "header":{
+       "type": "text",
+       "text": "header-content"
+     },
+     "body": {
+       "text": "body-content"
+     },
+     "footer": {
+       "text": "footer-content"
+     },
+     "action": {
+       "catalog_id": "CATALOG_ID",
+       "sections": [
+         {
+           "title": "section-title",
+           "product_items": [
+             { "product_retailer_id": "product-SKU-in-catalog" },
+             { "product_retailer_id": "product-SKU-in-catalog" }
+           ]
+         },
+         {
+           "title": "section-title",
+           "product_items": [
+             { "product_retailer_id": "product-SKU-in-catalog" },
+             { "product_retailer_id": "product-SKU-in-catalog" }
+           ]
+         }
+       ]
+     }
+   }
+ }
+
+ curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/messages' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+ "messaging_product": "whatsapp",
+   "recipient_type": "individual",
+   "to": "PHONE_NUMBER",
+   "type": "interactive",
+   "interactive": {
+     "type": "product_list",
+     "header":{
+       "type": "text",
+       "text": "header-content"
+     },
+     "body": {
+       "text": "body-content"
+     },
+     "footer": {
+       "text": "footer-content"
+     },
+     "action": {
+       "catalog_id": "CATALOG_ID",
+       "sections": [
+         {
+           "title": "section-title",
+           "product_items": [
+             { "product_retailer_id": "product-SKU-in-catalog" },
+             { "product_retailer_id": "product-SKU-in-catalog" }
+           ]
+         },
+         {
+           "title": "section-title",
+           "product_items": [
+             { "product_retailer_id": "product-SKU-in-catalog" },
+             { "product_retailer_id": "product-SKU-in-catalog" }
+           ]
+         }
+       ]
+     }
+   }
+ }'
+ {
+  "messaging_product": "whatsapp",
+  "contacts": [
+    {
+      "input": "+919999595313",
+      "wa_id": "919999595313"
+    }
+  ],
+  "messages": [
+    {
+      "id": "wamid.HBgMOTE5OTk5NTk1MzEzFQIAERgSQUMwM0Y5RjNEMjIwQTFEMEE5AA=="
+    }
+  ]
+}
+
+
+POST
+Message Replies
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/messages
+You can send any message as a reply to a previous message in a conversation by including the previous message's ID in the context object. The recipient will receive the new message along with a contextual bubble that displays the previous message's content.
+
+
+A successful response includes an object with an identifier prefixed with wamid. Use the ID listed after wamid to track your message status.
+
+Note: if the previous message is more than 30 days old or doesn't correspond to any message in the conversation, the message will be sent normally instead of as a reply.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw (json)
+
+{
+   "messaging_product": "whatsapp",
+   "context": {
+     "message_id": "MESSAGE_ID"
+   },
+   "to": "<phone number> or <wa_id>",
+   "type": "text",
+   "text": {
+     "preview_url": "False",
+     "body": "your-text-message-content"
+   }
+ }
+ curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/messages' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+   "messaging_product": "whatsapp",
+   "context": {
+     "message_id": "MESSAGE_ID"
+   },
+   "to": "<phone number> or <wa_id>",
+   "type": "text",
+   "text": {
+     "preview_url": "False",
+     "body": "your-text-message-content"
+   }
+ }'
+
+ {
+  "messaging_product": "whatsapp",
+  "contacts": [
+    {
+      "input": "+919999595313",
+      "wa_id": "919999595313"
+    }
+  ],
+  "messages": [
+    {
+      "id": "wamid.HBgMOTE5OTk5NTk1MzEzFQIAERgSQUMwM0Y5RjNEMjIwQTFEMEE5AA=="
+    }
+  ]
+}
+
+POST
+Mark Messages as READ
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID>/messages
+When you receive an incoming message from Webhooks, you can use the /messages endpoint to mark the message as read by changing its status to read. Messages marked as read display two blue check marks alongside their timestamp:
+
+
+We recommend marking incoming messages as read within 30 days of receipt. You cannot mark outgoing messages you sent as read. Marking a message as read will also mark earlier messages in the conversation as read.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+
+{
+  "messaging_product": "whatsapp",
+  "status": "read",
+  "message_id": "MESSAGE_ID"
+  }
+  curl --location --request GET 'https://amped-express.interakt.ai/api/v17.0/<PHONE_NUMBER_ID>/messages' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+  "messaging_product": "whatsapp",
+  "status": "read",
+  "message_id": "MESSAGE_ID"
+  }'
+
+  {
+  "success": true
+}
+

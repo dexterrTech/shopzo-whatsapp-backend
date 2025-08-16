@@ -1,0 +1,663 @@
+Phone Numbers
+GET
+Get Phone Numbers
+https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID/phone_numbers
+To get a list of all phone numbers associated with a WhatsApp Business Account, send a GET request to the above endpoint.
+
+In addition, phone numbers can be sorted in either ascending or descending order by last_onboarded_time, which is based on when the user completed onboarding for Embedded Signup. If not specified, the default order is descending.
+
+On success, a JSON object is returned with a list of all the business names, phone numbers, phone number IDs, and quality ratings associated with a business. Results are sorted by embedded signup completion date in descending order, with the most recently onboarded listed first.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/waba_id/phone_numbers' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json'
+
+{
+  "data": [
+    {
+      "verified_name": "Interakt",
+      "code_verification_status": "VERIFIED",
+      "display_phone_number": "+91 70215 12345",
+      "quality_rating": "GREEN",
+      "platform_type": "CLOUD_API",
+      "throughput": {
+        "level": "HIGH"
+      },
+      "last_onboarded_time": "2023-08-31T10:55:37+0000",
+      "id": "1234567890875"
+    }
+  ],
+  "paging": {
+    "cursors": {
+      "before": "QVFIUmotZAGczM2w0WElBS3JSbzJwZA2V4OUt3akhmeU83a2FIUEhNV1dEZAUxrSjBLWHppQTI3Mkp6VHd3T3pyQXFMY0RkcDdfeUxGbUthMl9vYzcxSG1fVVF3",
+      "after": "QVFIUmotZAGczM2w0WElBS3JSbzJwZA2V4OUt3akhmeU83a2FIUEhNV1dEZAUxrSjBLWHppQTI3Mkp6VHd3T3pyQXFMY0RkcDdfeUxGbUthMl9vYzcxSG1fVVF3"
+    }
+  }
+}
+
+GET
+Get Single Phone Number Details
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID?fields=status,is_official_business_account,id,name_status,code_verification_status,display_phone_number,platform_type,messaging_limit_tier,throughput
+To get information about a phone number, send a GET request to the above endpoint.
+
+On success, a JSON object is returned with the business name, phone number, phone number ID, and quality rating for the phone number queried.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+PARAMS
+fields
+status,is_official_business_account,id,name_status,code_verification_status,display_phone_number,platform_type,messaging_limit_tier,throughput
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id?fields=status%2Cis_official_business_account%2Cid%2Cname_status%2Ccode_verification_status%2Cdisplay_phone_number%2Cplatform_type%2Cmessaging_limit_tier%2Cthroughput' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json'
+
+{
+  "status": "CONNECTED",
+  "is_official_business_account": true,
+  "id": "112269058640637",
+  "name_status": "APPROVED",
+  "code_verification_status": "EXPIRED",
+  "display_phone_number": "+91 70215 12345",
+  "platform_type": "CLOUD_API",
+  "messaging_limit_tier": "TIER_100K",
+  "throughput": {
+    "level": "HIGH"
+  }
+}
+
+GET
+Get All Subscribed Apps for a WABA
+https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID/subscribed_apps
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+x-phone-number-id
+YOUR_PHONE_NUMBER_ID
+
+Enter your Phone Number ID
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/waba_id/subscribed_apps' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'x-phone-number-id: YOUR_PHONE_NUMBER_ID'
+
+{
+  "data": [
+    {
+      "whatsapp_business_api_data": {
+        "link": "http://app.interakt.ai/",
+        "name": "Interakt ISV",
+        "id": "256725303808337"
+      },
+      "override_callback_uri": "https://example.com/wa/callback.php"
+    }
+  ]
+}
+
+GET
+Get WhatsApp Business Profile
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical
+Use the /PHONE_NUMBER_ID/whatsapp_business_profile endpoint to retrieve and update your business profile. Customers can view your business profile by clicking your business's name or number in a conversation thread.
+
+Within the business profile request, you can specify what you want to know from your business. You have the following options:
+Table
+Name	Description
+about
+
+string	The business's About text. This text appears in the business's profile, beneath its profile image, phone number, and contact buttons.
+address
+
+string	Address of the business. Character limit 256.
+description
+
+string	Description of the business. Character limit 512.
+email
+
+string	The contact email address (in valid email format) of the business. Character limit 128.
+messaging_product	The messaging service used for the request. This value will always be whatsapp.
+profile_picture_url
+
+string	URL of the profile picture that was uploaded to Meta. Use the profile_picture_handle parameter to update this value.
+vertical
+
+string	Optional.
+
+Industry of the business. This can be either an empty string or one of the accepted values.
+websites
+
+array of strings	Optional.
+
+The URLs associated with the business. For instance, a website, Facebook Page, or Instagram. You must include the http:// or https:// portion of the URL.
+
+
+
+There is a maximum of 2 websites with a maximum of 256 characters each.
+curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/whatsapp_business_profile?fields=about%2Caddress%2Cdescription%2Cemail%2Cprofile_picture_url%2Cwebsites%2Cvertical' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json'
+{
+  "data": [
+    {
+      "about": "✅This account is powered by Interakt.shop",
+      "address": "",
+      "description": "Search, Sell, Message etc",
+      "email": "info@interakt.shop",
+      "profile_picture_url": "https://pps.whatsapp.net/v/t61.24694-24/369533397_322723140293213_1495487253937962747_n.jpg?ccb=11-4&oh=01_AdTa-zpnJ7s93_h9AVlO7QODqDsFr40zqLrnDT-bA1q0Bg&oe=65D61D14&_nc_sid=e6ed6c&_nc_cat=110",
+      "websites": [
+        "https://www.interakt.shop"
+      ],
+      "vertical": "PROF_SERVICES",
+      "messaging_product": "whatsapp"
+    }
+  ]
+}HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+PARAMS
+fields
+about,address,description,email,profile_picture_url,websites,vertical
+
+GET
+Get WABA Health Status
+https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?fields=health_status
+This document describes how to determine whether or not you can send messages successfully using a given API resource.
+
+If you request the health_status field on any of these nodes, the API will return a summary of the messaging health of all the nodes involved in messaging requests if using the targeted node. This summary indicates if you will be able to use the API to send messages successfully, if you will have limited success due to some limitation on one or more nodes, or if you will be prevented from messaging entirely.
+
+Request Syntax
+
+GET /<NODE_ID>?fields=health_status
+
+{
+  "health_status": {
+    "can_send_message": "<OVERALL_MESSAGING_STATUS>",
+    "entities": [
+      /* Only included if targeting a business phone number */
+      {
+        "entity_type": "PHONE_NUMBER",
+        "id": "<BUSINESS_PHONE_NUMBER_ID>",
+        "can_send_message": "<BUSINESS_PHONE_NUMBER_MESSAGING_STATUS>"
+      },
+      /* Only included if targeting a template */
+      {
+        "entity_type": "MESSAGE_TEMPLATE",
+        "id": "<TEMPLATE_ID>",
+        "can_send_message": "<TEMPLATE_MESSAGING_STATUS>"
+      },
+      /* WABA, business, and app always included */
+      {
+        "entity_type": "WABA",
+        "id": "<WABA_ID>",
+        "can_send_message": "<WABA_MESSAGING_STATUS>"
+      },
+      {
+        "entity_type": "BUSINESS",
+        "id": "<BUSINESS_PORTFOLIO_ID>",
+        "can_send_message": "<BUSINESS_PORTFOLIO_MESSAGING_STATUS>"
+      },
+      {
+        "entity_type": "APP",
+        "id": "<APP_ID>",
+        "can_send_message": "<APP_MESSAGING_STATUS>"
+      }
+    ]
+  },
+  "id": "<NODE_ID>"
+}
+Table
+Placeholder	Description	Example Value
+APP_ID	App ID.	634974688087057
+APP_MESSAGING_STATUS	The app's messaging health status. See Messaging Health Status.	AVAILABLE
+BUSINESS_PORTFOLIO_ID	Business portfolio ID.	506914307656634
+BUSINESS_PORTFOLIO_MESSAGING_STATUS	The business portfolio's messaging health status. See Messaging Health Status.	AVAILABLE
+BUSINESS_PHONE_NUMBER_ID	Business phone number ID.	106540352242922
+BUSINESS_PHONE_NUMBER_MESSAGING_STATUS	The business phone number's messaging health status. See Messaging Health Status.	AVAILABLE
+NODE_ID	The targeted node's ID.	161311403722088
+OVERALL_MESSAGING_STATUS	The overall messaging health status, given all of the nodes involved in a messaging request, if using the targeted node. See Messaging Health Status.	AVAILABLE
+TEMPLATE_ID	Template ID.	1421988012088524
+TEMPLATE_MESSAGING_STATUS	The template's messaging health status. See Messaging Health Status.	AVAILABLE
+WABA_ID	WABA ID.	102290129340398
+WABA_MESSAGING_STATUS	The WABA's messaging health status. See Messaging Health Status.	AVAILABLE
+
+Messaging Health Status
+When you attempt to send a message, multiple nodes are involved, including the app, the business portfolio that owns or has claimed it, a WABA, a business phone number, and a template (if sending a template message).
+
+Each of these nodes can have one of the following health statuses assigned to the can_send_message property:
+
+AVAILABLE: Indicates that the node meets all messaging requirements.
+LIMITED: Indicates that the node meets messaging requirements, but has some limitations. If a given node has this value, additional info will be included.
+BLOCKED: Indicates that the node does not meet one or more messaging requirements. If a given node has this value, the errors property will be included which describes the error and a possible solution.
+Overall Status
+The overall health status property (health_status.can_send_message) will be set as follows:
+
+If one or more nodes is blocked, it will be set to BLOCKED.
+If no nodes are blocked, but one or more nodes is limited, it will be set to LIMITED.
+If all nodes are available, it will be set to AVAILABLE.
+curl 'https://graph.facebook.com/v20.0/106540352242922?fields=health_status' \
+-H 'Authorization: Bearer EAAJB'
+{
+  "health_status": {
+    "can_send_message": "AVAILABLE",
+    "entities": [
+      {
+        "entity_type": "PHONE_NUMBER",
+        "id": "106540352242922",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "WABA",
+        "id": "102290129340398",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "BUSINESS",
+        "id": "506914307656634",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "APP",
+        "id": "634974688087057",
+        "can_send_message": "AVAILABLE"
+      }
+    ]
+  },
+  "id": "106540352242922"
+}
+Additional Info Property
+If a given node's can_send_message property is set to LIMITED, the additional_info property will be included, which provides additional context for the limitation.
+
+Example Limited Response
+This is an example response to a request on a business phone number that can be used to send messages, but has a limit on the number it can send because its display name has not been approved.
+{
+  "health_status": {
+    "can_send_message": "LIMITED",
+    "entities": [
+      {
+        "entity_type": "PHONE_NUMBER",
+        "id": "106540352242922",
+        "can_send_message": "LIMITED",
+        "additional_info": [
+          "Your display name has not been approved yet. Your message limit will increase after the display name is approved."
+        ]
+      },
+      {
+        "entity_type": "WABA",
+        "id": "102290129340398",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "BUSINESS",
+        "id": "506914307656634",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "APP",
+        "id": "634974688087057",
+        "can_send_message": "AVAILABLE"
+      }
+    ]
+  },
+  "id": "105154286024403"
+}Errors Property
+If a given node's can_send_message property is set to BLOCKED, the errors property will be included, which describes the reason for the status and a possible solution.
+
+Example Blocked Response
+This is an example response to a request on a template that can't be sent in a template message because it is still in a pending state.
+{
+  "health_status": {
+    "can_send_message": "BLOCKED",
+    "entities": [
+      {
+        "entity_type": "MESSAGE_TEMPLATE",
+        "id": "2632273056924580",
+        "can_send_message": "BLOCKED",
+        "errors": [
+          {
+            "error_code": 141002,
+            "error_description": "Message templates can only be sent out if they are approved.",
+            "possible_solution": "Edit or appeal the message template review decision."
+          }
+        ]
+      },
+      {
+        "entity_type": "WABA",
+        "id": "102290129340398",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "BUSINESS",
+        "id": "506914307656634",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "APP",
+        "id": "634974688087057",
+        "can_send_message": "AVAILABLE"
+      }
+    ]
+  },
+  "id": "2632273056924580"
+}
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+PARAMS
+fields
+health_status
+curl --location 'https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?fields=health_status' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json'
+{
+  "health_status": {
+    "can_send_message": "AVAILABLE",
+    "entities": [
+      {
+        "entity_type": "WABA",
+        "id": "925373641323808",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "BUSINESS",
+        "id": "928974617157828",
+        "can_send_message": "AVAILABLE"
+      },
+      {
+        "entity_type": "APP",
+        "id": "256725303808337",
+        "can_send_message": "AVAILABLE"
+      }
+    ]
+  },
+  "id": "282972348242578"
+}
+
+POST
+Update Business Profile
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NO_ID/whatsapp_business_profile
+To update your profile, make a POST call to /PHONE_NUMBER_ID/whatsapp_business_profile. In your request, you can include the parameters listed below.
+
+Parameters
+
+Table
+Name	Description (Click the arrow in the left column for supported values.)
+about
+
+string	Optional.
+
+The business's About text. This text appears in the business's profile, beneath its profile image, phone number, and contact buttons.
+
+
+
+- String cannot be empty.
+
+- Strings must be between 1 and 139 characters.
+
+- Rendered emojis are supported however their unicode values are not. Emoji unicode values must be Java- or JavaScript-escape encoded.
+
+- Hyperlinks can be included but will not render as clickable links.
+
+- Markdown is not supported.
+address
+
+string	Optional.
+
+Address of the business. Character limit 256.
+description
+
+string	Optional.
+
+Description of the business. Character limit 512.
+email
+
+string	Optional.
+
+The contact email address (in valid email format) of the business. Character limit 128.
+messaging_product	Required.
+
+The messaging service used for the request. Always set it to "whatsapp" if you are using the WhatsApp Business API.
+profile_picture_handle
+
+string	Optional.
+
+Handle of the profile picture. This handle is generated when you upload the binary file for the profile picture to Meta using the Resumable Upload API.
+vertical	Optional.
+
+Industry of the business. This can be either an empty string or one of the accepted values.
+Supported Values	- UNDEFINED
+
+- OTHER
+
+- AUTO
+
+- BEAUTY
+
+- APPAREL
+
+- EDU
+
+- ENTERTAIN
+
+- EVENT_PLAN
+
+- FINANCE
+
+- GROCERY
+
+- GOVT
+
+- HOTEL
+
+- HEALTH
+
+- NONPROFIT
+
+- PROF_SERVICES
+
+- RETAIL
+
+- TRAVEL
+
+- RESTAURANT
+
+- NOT_A_BIZ
+websites
+
+array of strings	Optional.
+
+The URLs associated with the business. For instance, a website, Facebook Page, or Instagram. You must include the http:// or https:// portion of the URL.
+
+
+
+There is a maximum of 2 websites with a maximum of 256 characters each.
+Delete Business Profile
+To delete your business profile, you must delete your phone number.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+
+{
+    "messaging_product": "whatsapp",
+    "about": ":This account is powered by Interakt.shop",
+    "address": "Interakt - Cello Triumph Tower, Mumbai - 400301.",
+    "description": "Search, Sell, Message etc",
+    "vertical": "PROF_SERVICES",
+    "email": "info@interakt.shop",
+    "websites": [
+      "https://www.interakt.shop/"
+    ],
+          "profile_picture_handle": "Media_Handle"
+}
+curl --location 'https://amped-express.interakt.ai/api/v17.0/phone_no_id/whatsapp_business_profile' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "messaging_product": "whatsapp",
+    "about": ":This account is powered by Interakt.shop",
+    "address": "Interakt - Cello Triumph Tower, Mumbai - 400301.",
+    "description": "Search, Sell, Message etc",
+    "vertical": "PROF_SERVICES",
+    "email": "info@interakt.shop",
+    "websites": [
+      "https://www.interakt.shop/"
+    ],
+          "profile_picture_handle": "Media_Handle"
+}'
+
+{
+  "success": true
+}
+POST
+Register Number/Display Name Update
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/register
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw (json)
+
+  {
+            "messaging_product": "whatsapp",
+            "pin": "345464"
+        }
+
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/register' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json' \
+--data '  {
+            "messaging_product": "whatsapp",
+            "pin": "345464"
+        }'
+
+        {
+  "success": true
+}POST
+Number-Level Webhook Configuration
+https://amped-express.interakt.ai/api/v17.0/PHONE_NUMBER_ID
+Using this API, you can Configure Webhook URL individually for the numbers present in the WABA ID.
+
+Note: All Webhooks will be sent
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+x-waba-id
+YOUR_WABA_ID
+
+x-phone-number-id
+YOUR_PHONE_NUMBER_ID
+
+Content-Type
+application/json
+
+Body
+raw (json)
+
+{
+  "webhook_configuration": {
+    "override_callback_uri": "https://animated-kind-galleon.glitch.me/webhook",
+    "verify_token": "VERIFY_TOKEN"
+  }
+}
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/PHONE_NUMBER_ID' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'x-phone-number-id: YOUR_PHONE_NUMBER_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+  "webhook_configuration": {
+    "override_callback_uri": "https://animated-kind-galleon.glitch.me/webhook",
+    "verify_token": "VERIFY_TOKEN"
+  }
+}'
+
+{
+  "success": true
+}

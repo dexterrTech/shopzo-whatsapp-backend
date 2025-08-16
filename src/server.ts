@@ -6,6 +6,10 @@ import compression from "compression";
 import interaktRoutes from "./routes/interaktRoutes";
 import contactRoutes from "./routes/contactRoutes";
 import campaignRoutes from "./routes/campaignRoutes";
+import accMatricsRoutes from "./routes/accMatrics";
+import phoneNumbersRoutes from "./routes/phoneNumbers";
+import conversationalComponentsRoutes from "./routes/conversationalComponents";
+import sendMessageRoutes from "./routes/sendMessage";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
 import swaggerUi from "swagger-ui-express";
@@ -27,6 +31,10 @@ app.get("/health", (_req, res) => {
 app.use("/api/interakt", interaktRoutes);
 app.use("/api/contacts", contactRoutes);
 app.use("/api/campaigns", campaignRoutes);
+app.use("/api/acc-matrics", accMatricsRoutes);
+app.use("/api/phone-numbers", phoneNumbersRoutes);
+app.use("/api/conversational-components", conversationalComponentsRoutes);
+app.use("/api/send-message", sendMessageRoutes);
 
 // Swagger docs
 app.get("/docs.json", (_req, res) => {
