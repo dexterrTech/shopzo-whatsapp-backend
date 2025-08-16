@@ -32,14 +32,24 @@ const options: swaggerJSDoc.Options = {
     },
   },
   apis: [
-    // Use absolute paths to ensure proper file scanning
-    path.join(__dirname, "../routes/*.ts"),
-    path.join(__dirname, "../routes/**/*.ts")
+    // For development: scan TypeScript files
+    // For production: scan compiled JavaScript files
+    ...(process.env.NODE_ENV === 'development' ? [
+      path.join(__dirname, "../routes/*.ts"),
+      path.join(__dirname, "../routes/**/*.ts")
+    ] : [
+      path.join(__dirname, "../routes/*.js"),
+      path.join(__dirname, "../routes/**/*.js")
+    ])
   ],
 };
 
 // Add debugging to see what files are being scanned
-console.log("Swagger scanning paths:", options.apis);
+console.log("🔍 Swagger Configuration:");
+console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+console.log(`   __dirname: ${__dirname}`);
+console.log(`   Scanning paths:`, options.apis);
+console.log(`   File extensions: ${process.env.NODE_ENV === 'development' ? '.ts' : '.js'}`);
 
 export const swaggerSpec = swaggerJSDoc(options);
 
@@ -47,9 +57,9 @@ export const swaggerSpec = swaggerJSDoc(options);
 console.log("Generated Swagger spec paths:", Object.keys((swaggerSpec as any).paths || {}));
 console.log("Total endpoints found:", Object.keys((swaggerSpec as any).paths || {}).length);
 
-// If no endpoints found, create a basic manual spec
+// If no endpoints found, create a comprehensive manual spec
 if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).length === 0) {
-  console.log("No endpoints found by swagger-jsdoc, creating manual spec...");
+  console.log("⚠️  No endpoints found by swagger-jsdoc, creating comprehensive manual spec...");
   
   (swaggerSpec as any).paths = {
     "/api/test": {
@@ -76,7 +86,7 @@ if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).lengt
         }
       }
     },
-    "/webhook": {
+    "/api/interakt/webhook": {
       get: {
         tags: ["Webhook"],
         summary: "Webhook Verification",
@@ -99,11 +109,69 @@ if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).lengt
             }
           }
         }
+      },
+      post: {
+        tags: ["Webhook"],
+        summary: "Webhook Message Updates",
+        description: "Receives message status updates and incoming messages from Facebook",
+        responses: {
+          200: {
+            description: "Webhook received successfully"
+          }
+        }
+      }
+    },
+    "/api/interakt/phone-numbers": {
+      get: {
+        tags: ["Phone Numbers"],
+        summary: "Get Phone Numbers",
+        description: "Returns Interakt phone numbers",
+        responses: {
+          200: {
+            description: "List of phone numbers"
+          }
+        }
+      }
+    },
+    "/api/interakt/templates": {
+      get: {
+        tags: ["Templates"],
+        summary: "Get All Templates",
+        description: "Returns WABA message templates",
+        responses: {
+          200: {
+            description: "List of templates"
+          }
+        }
+      }
+    },
+    "/api/contacts": {
+      get: {
+        tags: ["Contacts"],
+        summary: "Get all contacts",
+        description: "Retrieve a list of all contacts",
+        responses: {
+          200: {
+            description: "List of contacts retrieved successfully"
+          }
+        }
+      }
+    },
+    "/api/campaigns": {
+      get: {
+        tags: ["Campaigns"],
+        summary: "Get all campaigns",
+        description: "Retrieve a list of all campaigns",
+        responses: {
+          200: {
+            description: "List of campaigns retrieved successfully"
+          }
+        }
       }
     }
   };
   
-  console.log("Manual spec created with", Object.keys((swaggerSpec as any).paths).length, "endpoints");
+  console.log("✅ Manual spec created with", Object.keys((swaggerSpec as any).paths).length, "endpoints");
 }
 
 
