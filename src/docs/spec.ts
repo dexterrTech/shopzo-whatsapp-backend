@@ -10,7 +10,16 @@ const options: swaggerJSDoc.Options = {
       version: "1.0.0",
       description: "API for WhatsApp Dashboard with Interakt integration new ",
     },
-    servers: [{ url: `http://localhost:${env.PORT || 8000}` }],
+    servers: [
+      { 
+        url: `http://localhost:${env.PORT || 8000}`,
+        description: 'Local Development'
+      },
+      {
+        url: 'https://whatsapp-backend-315431551371.europe-west1.run.app',
+        description: 'Production Server'
+      }
+    ],
     components: {
       securitySchemes: {
         InteraktHeaders: {

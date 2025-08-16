@@ -21,6 +21,9 @@ const EnvSchema = z.object({
   // Webhook Configuration
   WEBHOOK_VERIFY_TOKEN: z.string(),
   WEBHOOK_URL: z.string(),
+  
+  // Server Configuration
+  SERVER_URL: z.string().optional(),
 
   // Database Configuration
   DB_HOST: z.string(),

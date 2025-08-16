@@ -66,6 +66,13 @@ const requiredEnvVars = [
   'WEBHOOK_VERIFY_TOKEN'
 ];
 
+// Log server configuration
+console.log('🌐 Server Configuration:');
+console.log(`   Environment: ${env.NODE_ENV}`);
+console.log(`   Port: ${env.PORT}`);
+console.log(`   Server URL: ${env.SERVER_URL || 'Not set (using localhost)'}`);
+console.log(`   Swagger will show: ${env.SERVER_URL ? `${env.SERVER_URL} and localhost:${env.PORT}` : `localhost:${env.PORT} only`}`);
+
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingEnvVars.length > 0) {
   console.warn("⚠️  Missing environment variables:", missingEnvVars);
