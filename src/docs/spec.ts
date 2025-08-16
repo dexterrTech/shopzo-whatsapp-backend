@@ -32,15 +32,12 @@ const options: swaggerJSDoc.Options = {
     },
   },
   apis: [
-    // For development: scan TypeScript files
-    // For production: scan compiled JavaScript files
-    ...(process.env.NODE_ENV === 'development' ? [
-      path.join(__dirname, "../routes/*.ts"),
-      path.join(__dirname, "../routes/**/*.ts")
-    ] : [
-      path.join(__dirname, "../routes/*.js"),
-      path.join(__dirname, "../routes/**/*.js")
-    ])
+    // Try to scan both TypeScript and JavaScript files
+    // This ensures compatibility in both development and production
+    path.join(__dirname, "../routes/*.ts"),
+    path.join(__dirname, "../routes/**/*.ts"),
+    path.join(__dirname, "../routes/*.js"),
+    path.join(__dirname, "../routes/**/*.js")
   ],
 };
 
@@ -49,13 +46,25 @@ console.log("🔍 Swagger Configuration:");
 console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
 console.log(`   __dirname: ${__dirname}`);
 console.log(`   Scanning paths:`, options.apis);
-console.log(`   File extensions: ${process.env.NODE_ENV === 'development' ? '.ts' : '.js'}`);
+console.log(`   Will scan both .ts and .js files for maximum compatibility`);
 
 export const swaggerSpec = swaggerJSDoc(options);
 
 // Debug: Log the generated spec
-console.log("Generated Swagger spec paths:", Object.keys((swaggerSpec as any).paths || {}));
-console.log("Total endpoints found:", Object.keys((swaggerSpec as any).paths || {}).length);
+console.log("📊 Swagger Generation Results:");
+console.log("   Generated spec paths:", Object.keys((swaggerSpec as any).paths || {}));
+console.log("   Total endpoints found:", Object.keys((swaggerSpec as any).paths || {}).length);
+
+// Check if swagger-jsdoc found any endpoints
+if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).length === 0) {
+  console.log("❌ swagger-jsdoc found NO endpoints - this indicates a scanning issue");
+  console.log("   This usually means:");
+  console.log("   1. File paths are incorrect");
+  console.log("   2. Files don't contain proper OpenAPI documentation");
+  console.log("   3. Environment mismatch between dev and production");
+} else {
+  console.log("✅ swagger-jsdoc successfully scanned and found endpoints");
+}
 
 // If no endpoints found, create a comprehensive manual spec
 if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).length === 0) {

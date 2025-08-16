@@ -5,7 +5,7 @@ dotenv.config();
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.string().default("8080"),
+  PORT: z.string().default("8000"),
 
   // Facebook Graph API credentials (from sir's curl command)
   INTERAKT_WABA_ID: z.string(),
@@ -53,6 +53,6 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
-export const numericPort = Number(env.PORT) || 8080;
+export const numericPort = Number(env.PORT) || 8000;
 
 

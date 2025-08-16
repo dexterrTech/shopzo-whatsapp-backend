@@ -70,11 +70,11 @@ const requiredEnvVars = [
 console.log('🌐 Server Configuration:');
 console.log(`   Environment: ${env.NODE_ENV}`);
 console.log(`   Process NODE_ENV: ${process.env.NODE_ENV}`);
-console.log(`   Port: ${env.PORT}`);
+console.log(`   Port: ${env.PORT} (numericPort: ${numericPort})`);
 console.log(`   Server URL: ${env.SERVER_URL || 'Not set (using localhost)'}`);
 console.log(`   Swagger will show: ${env.SERVER_URL ? `${env.SERVER_URL} and localhost:${env.PORT}` : `localhost:${env.PORT} only`}`);
 console.log(`   Running from: ${__dirname}`);
-console.log(`   File extensions: ${process.env.NODE_ENV === 'production' ? '.js' : '.ts'}`);
+console.log(`   Swagger will scan both .ts and .js files for compatibility`);
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingEnvVars.length > 0) {
