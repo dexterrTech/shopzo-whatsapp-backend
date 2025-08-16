@@ -8,7 +8,7 @@ const options: swaggerJSDoc.Options = {
       version: "1.0.0",
       description: "Interakt proxy backend with fallback mocks",
     },
-    servers: [{ url: "http://localhost:4000" }],
+    servers: [{ url: "http://localhost:8000" }],
     components: {
       securitySchemes: {
         InteraktHeaders: {

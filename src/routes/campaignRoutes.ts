@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
+import { ContactService } from "../services/contactService";
 
 const router = Router();
 
@@ -177,39 +178,96 @@ router.post("/send-template", async (req, res, next) => {
 
     const body = bodySchema.parse(req.body);
 
-    // In a real implementation, you would:
-    // 1. Fetch the template details from Interakt
-    // 2. Fetch the contacts from your database using contactIds
-    // 3. Send the template message to each contact
-
-    const results = await withFallback({
-      feature: "sendTemplateToContacts",
-      attempt: async () => {
-        // This is a simplified version - in reality you'd loop through contacts
-        // and send individual messages using interaktClient.sendMediaTemplate
-        
-        // Mock successful sends
-        const messageIds = body.contactIds.map(() => 
-          "wamid." + Math.random().toString(36).slice(2, 15).toUpperCase()
-        );
-        
-        return {
-          success: true,
-          messageIds,
-          failedCount: 0,
-          totalSent: body.contactIds.length,
-        };
-      },
+    // Fetch template details (fallback will provide mock if credentials are missing)
+    const template = await withFallback({
+      feature: "getTemplateForBulkSend",
+      attempt: () => interaktClient.getTemplateById(body.templateId),
       fallback: async () => ({
-        success: true,
-        messageIds: body.contactIds.map(() => "mock-msg-" + Math.random().toString(36).slice(2, 8)),
-        failedCount: 0,
-        totalSent: body.contactIds.length,
+        id: body.templateId,
+        name: "mock_template",
+        language: "en",
+        parameter_format: "POSITIONAL",
+        components: [
+          { type: "BODY", text: "Hello {{1}}" }
+        ],
+        status: "APPROVED",
+        category: "UTILITY",
         fallback: true,
       }),
     });
 
-    res.json(results);
+    // Resolve contacts
+    const contacts = await Promise.all(
+      body.contactIds.map(async (id) => {
+        const numericId = Number(id);
+        if (!Number.isFinite(numericId)) return null;
+        return await ContactService.getContactById(numericId);
+      })
+    );
+
+    // Prepare parameter mapping (POSITIONAL only)
+    const paramValues: string[] | undefined = body.parameters
+      ? Object.keys(body.parameters)
+          .sort()
+          .map((k) => body.parameters![k])
+      : undefined;
+
+    const sendResults = await Promise.allSettled(
+      contacts.map(async (contact) => {
+        if (!contact || !contact.whatsapp_number) {
+          throw new Error("Missing contact or whatsapp_number");
+        }
+
+        const components = paramValues && paramValues.length > 0
+          ? [
+              {
+                type: "body",
+                parameters: paramValues.map((text) => ({ type: "text", text })),
+              },
+            ]
+          : undefined;
+
+        const payload: any = {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: contact.whatsapp_number,
+          type: "template",
+          template: {
+            name: template.name,
+            language: { code: template.language || "en" },
+            ...(components ? { components } : {}),
+          },
+        };
+
+        const resp = await withFallback({
+          feature: "sendTemplateToContact",
+          attempt: () => interaktClient.sendMediaTemplate(payload),
+          fallback: async () => ({
+            messaging_product: "whatsapp",
+            contacts: [{ input: payload.to, wa_id: payload.to }],
+            messages: [{ id: "mock-bulk-" + Math.random().toString(36).slice(2, 10), message_status: "accepted" }],
+            fallback: true,
+          }),
+        });
+
+        const msgId = resp?.messages?.[0]?.id ?? "unknown";
+        return msgId;
+      })
+    );
+
+    const messageIds: string[] = [];
+    let failedCount = 0;
+    sendResults.forEach((r) => {
+      if (r.status === "fulfilled") messageIds.push(r.value);
+      else failedCount += 1;
+    });
+
+    res.json({
+      success: failedCount === 0,
+      messageIds,
+      failedCount,
+      totalSent: contacts.length,
+    });
   } catch (err) {
     next(err);
   }

@@ -8,6 +8,8 @@ const router = Router();
 /**
  * @openapi
  * tags:
+ *   - name: Webhook
+ *     description: Facebook webhook verification and message status updates
  *   - name: Phone Numbers
  *     description: Interakt phone number management
  *   - name: Templates
@@ -17,6 +19,187 @@ const router = Router();
  *   - name: Chat Message Send
  *     description: Send WhatsApp session/chat messages
  */
+
+/**
+ * @openapi
+ * /api/interakt/webhook:
+ *   get:
+ *     tags:
+ *       - Webhook
+ *     summary: Webhook Verification
+ *     description: Facebook webhook verification endpoint. Returns hub.challenge parameter for verification.
+ *     parameters:
+ *       - in: query
+ *         name: hub.mode
+ *         schema:
+ *           type: string
+ *         description: Webhook mode
+ *       - in: query
+ *         name: hub.verify_token
+ *         schema:
+ *           type: string
+ *         description: Webhook verification token
+ *       - in: query
+ *         name: hub.challenge
+ *         schema:
+ *           type: string
+ *         description: Challenge string to verify webhook
+ *     responses:
+ *       200:
+ *         description: Webhook verified successfully
+ *         content:
+ *           text/plain:
+ *             schema:
+ *               type: string
+ *               example: "CHALLENGE_STRING_HERE"
+ */
+// GET /api/interakt/webhook - Webhook verification
+router.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  // Verify the webhook
+  if (mode === "subscribe" && token === process.env.WEBHOOK_VERIFY_TOKEN) {
+    console.log("Webhook verified");
+    res.status(200).send(challenge);
+  } else {
+    console.log("Webhook verification failed");
+    res.sendStatus(403);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook:
+ *   post:
+ *     tags:
+ *       - Webhook
+ *     summary: Webhook Message Updates
+ *     description: Receives message status updates and incoming messages from Facebook
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Webhook received successfully
+ */
+// POST /api/interakt/webhook - Receive webhook updates
+router.post("/webhook", (req, res) => {
+  const body = req.body;
+
+  // Handle different webhook events
+  if (body.object === "whatsapp_business_account") {
+    body.entry?.forEach((entry: any) => {
+      entry.changes?.forEach((change: any) => {
+        if (change.value?.messages) {
+          // Handle incoming messages
+          console.log("Incoming message:", change.value.messages);
+        }
+        if (change.value?.statuses) {
+          // Handle message status updates
+          console.log("Message status update:", change.value.statuses);
+        }
+      });
+    });
+  }
+
+  res.sendStatus(200);
+});
+
+/**
+ * @openapi
+ * /api/interakt/test-message:
+ *   post:
+ *     tags:
+ *       - Template Message Send
+ *     summary: Test Template Message (Facebook Graph API)
+ *     description: Send a test template message using Facebook Graph API format. This matches the curl command provided.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - to
+ *               - template_name
+ *             properties:
+ *               to:
+ *                 type: string
+ *                 description: Recipient phone number (E.164 format)
+ *                 example: "917447340010"
+ *               template_name:
+ *                 type: string
+ *                 description: Template name to send
+ *                 example: "hello_world"
+ *               language_code:
+ *                 type: string
+ *                 description: Language code for template
+ *                 default: "en_US"
+ *                 example: "en_US"
+ *     responses:
+ *       202:
+ *         description: Test message sent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message_id:
+ *                   type: string
+ *                 recipient:
+ *                   type: string
+ *                 template:
+ *                   type: string
+ */
+// POST /api/interakt/test-message - Test message endpoint matching sir's curl
+router.post("/test-message", async (req, res, next) => {
+  try {
+    const bodySchema = z.object({
+      to: z.string().min(1),
+      template_name: z.string().min(1),
+      language_code: z.string().default("en_US"),
+    });
+
+    const body = bodySchema.parse(req.body);
+
+    // Build payload matching sir's curl command format
+    const payload = {
+      messaging_product: "whatsapp" as const,
+      to: body.to,
+      type: "template" as const,
+      template: {
+        name: body.template_name,
+        language: {
+          code: body.language_code,
+        },
+      },
+    };
+
+    // Send via Interakt client (will use Facebook Graph API)
+    const data = await withFallback({
+      feature: "sendTestTemplate",
+      attempt: () => interaktClient.sendTestTemplate(payload),
+      fallback: () => ({
+        success: true,
+        message_id: "test-msg-" + Math.random().toString(36).slice(2, 8),
+        recipient: body.to,
+        template: body.template_name,
+        fallback: true,
+      }),
+    });
+
+    res.status(202).json(data);
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * @openapi
@@ -234,6 +417,74 @@ router.get("/templates", async (req, res, next) => {
  *                   type: string
  *                 category:
  *                   type: string
+ * 
+ * @openapi
+ * /api/interakt/templates/media:
+ *   post:
+ *     tags:
+ *       - Templates
+ *     summary: Create Media Template
+ *     description: Creates a new WhatsApp media template (image, video, document) via Interakt. Media templates can include images, videos, or documents in the header.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - language
+ *               - category
+ *               - components
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Template name
+ *               language:
+ *                 type: string
+ *                 description: Template language code
+ *               category:
+ *                 type: string
+ *                 enum: [AUTHENTICATION, MARKETING, UTILITY]
+ *                 description: Template category
+ *               components:
+ *                 type: array
+ *                 description: Template components with media header
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     type:
+ *                       type: string
+ *                       enum: [HEADER, BODY, FOOTER, BUTTONS]
+ *                     format:
+ *                       type: string
+ *                       enum: [IMAGE, VIDEO, DOCUMENT]
+ *                       description: Media format (for HEADER type)
+ *                     example:
+ *                       type: object
+ *                       properties:
+ *                         header_handle:
+ *                           type: array
+ *                           items:
+ *                             type: string
+ *                           description: Media asset handle from Resumable Upload API
+ *                         body_text:
+ *                           type: array
+ *                           description: Example body text parameters
+ *     responses:
+ *       201:
+ *         description: Media template created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                 status:
+ *                   type: string
+ *                 category:
+ *                   type: string
  */
 // POST /api/interakt/templates
 router.post("/templates", async (req, res, next) => {
@@ -251,6 +502,38 @@ router.post("/templates", async (req, res, next) => {
       feature: "createTextTemplate",
       attempt: () => interaktClient.createTextTemplate(body),
       fallback: () => ({ id: "mock-template-id", status: "PENDING", category: body.category, fallback: true }),
+    });
+
+    res.status(201).json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/interakt/templates/media
+router.post("/templates/media", async (req, res, next) => {
+  try {
+    const bodySchema = z.object({
+      name: z.string().min(1),
+      language: z.string().min(1),
+      category: z.enum(["AUTHENTICATION", "MARKETING", "UTILITY"]),
+      components: z.array(z.object({
+        type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS"]),
+        format: z.enum(["IMAGE", "VIDEO", "DOCUMENT"]).optional(),
+        text: z.string().optional(),
+        example: z.object({
+          header_handle: z.array(z.string()).optional(),
+          body_text: z.array(z.array(z.string())).optional(),
+        }).optional(),
+      })),
+      auto_category: z.boolean().optional(),
+    });
+
+    const body = bodySchema.parse(req.body);
+    const data = await withFallback({
+      feature: "createMediaTemplate",
+      attempt: () => interaktClient.createTextTemplate(body), // Using same method for now
+      fallback: () => ({ id: "mock-media-template-id", status: "PENDING", category: body.category, fallback: true }),
     });
 
     res.status(201).json(data);
@@ -329,7 +612,7 @@ router.get("/templates/:id", async (req, res, next) => {
  *   post:
  *     tags:
  *       - Template Message Send
- *     summary: Send Template Message
+ *     summary: Send Text Template Message
  *     description: Sends a pre-approved WhatsApp message template to a single recipient via Interakt. Template messages are used for notifications, customer care, and marketing campaigns. This endpoint supports all approved template types including text-based, media-based, interactive, and authentication templates.
  *     requestBody:
  *       required: true
@@ -443,7 +726,192 @@ router.post("/messages", async (req, res, next) => {
   }
 });
 
+// POST /api/interakt/messages/media
+router.post("/messages/media", async (req, res, next) => {
+  try {
+    const payload = z
+      .object({
+        messaging_product: z.literal("whatsapp"),
+        recipient_type: z.literal("individual").default("individual"),
+        to: z.string(),
+        type: z.literal("template"),
+        template: z.object({
+          name: z.string(),
+          language: z.object({
+            code: z.string(),
+          }),
+          components: z.array(z.object({
+            type: z.enum(["header", "body", "footer", "buttons"]),
+            parameters: z.array(z.object({
+              type: z.enum(["image", "video", "document", "text"]),
+              image: z.object({
+                link: z.string(),
+              }).optional(),
+              video: z.object({
+                link: z.string(),
+              }).optional(),
+              document: z.object({
+                link: z.string(),
+              }).optional(),
+              text: z.string().optional(),
+            })),
+          })),
+        }),
+      })
+      .parse(req.body);
+
+    const data = await withFallback({
+      feature: "sendMediaTemplate",
+      attempt: () => interaktClient.sendMediaTemplate(payload),
+      fallback: () => ({
+        messaging_product: "whatsapp",
+        contacts: [{ input: payload.to, wa_id: payload.to }],
+        messages: [{ id: "mock-media-msg-id", message_status: "accepted" }],
+        fallback: true,
+      }),
+    });
+
+    res.status(202).json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 /**
+ * @openapi
+ * /api/interakt/messages/media:
+ *   post:
+ *     tags:
+ *       - Template Message Send
+ *     summary: Send Media Template Message
+ *     description: Sends a media-based WhatsApp template message (image, video, document) to a single recipient via Interakt. Media templates can include images, videos, or documents in the header with dynamic parameters.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - messaging_product
+ *               - to
+ *               - type
+ *               - template
+ *             properties:
+ *               messaging_product:
+ *                 type: string
+ *                 enum: [whatsapp]
+ *                 description: Must be "whatsapp"
+ *               recipient_type:
+ *                 type: string
+ *                 enum: [individual]
+ *                 default: individual
+ *                 description: Recipient type
+ *               to:
+ *                 type: string
+ *                 description: Recipient phone number
+ *               type:
+ *                 type: string
+ *                 enum: [template]
+ *                 description: Message type
+ *               template:
+ *                 type: object
+ *                 description: Media template details
+ *                 properties:
+ *                   name:
+ *                     type: string
+ *                     description: Template name
+ *                   language:
+ *                     type: object
+ *                     properties:
+ *                       code:
+ *                         type: string
+ *                         description: Language code
+ *                   components:
+ *                     type: array
+ *                     description: Template components with media parameters
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         type:
+ *                           type: string
+ *                           enum: [header, body, footer, buttons]
+ *                         parameters:
+ *                           type: array
+ *                           items:
+ *                             type: object
+ *                             properties:
+ *                               type:
+ *                                 type: string
+ *                                 enum: [image, video, document, text]
+ *                               image:
+ *                                 type: object
+ *                                 properties:
+ *                                   link:
+ *                                     type: string
+ *                                     description: Image URL
+ *                               video:
+ *                                 type: object
+ *                                 properties:
+ *                                   link:
+ *                                     type: string
+ *                                     description: Video URL
+ *                               document:
+ *                                 type: object
+ *                                 properties:
+ *                                   link:
+ *                                     type: string
+ *                                     description: Document URL
+ *                               text:
+ *                                 type: string
+ *                                 description: Text parameter value
+ *             example:
+ *               messaging_product: "whatsapp"
+ *               recipient_type: "individual"
+ *               to: "919999595313"
+ *               type: "template"
+ *               template:
+ *                 name: "test_template"
+ *                 language:
+ *                   code: "en"
+ *                 components:
+ *                   - type: "header"
+ *                     parameters:
+ *                       - type: "image"
+ *                         image:
+ *                           link: "https://example.com/image.jpg"
+ *                   - type: "body"
+ *                     parameters:
+ *                       - type: "text"
+ *                         text: "John"
+ *     responses:
+ *       202:
+ *         description: Media template message accepted for delivery
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 messaging_product:
+ *                   type: string
+ *                 contacts:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       input:
+ *                         type: string
+ *                       wa_id:
+ *                         type: string
+ *                 messages:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       message_status:
+ *                         type: string
+ * 
  * @openapi
  * /api/interakt/session-messages:
  *   post:

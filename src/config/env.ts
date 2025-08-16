@@ -5,12 +5,14 @@ dotenv.config();
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.string().default("4000"),
+  PORT: z.string().default("8000"),
 
-  INTERAKT_BASE_URL: z.string().url().default("https://amped-express.interakt.ai/api/v17.0"),
+  // Facebook Graph API credentials (from sir's curl command)
   INTERAKT_WABA_ID: z.string().optional(),
   INTERAKT_ACCESS_TOKEN: z.string().optional(),
   INTERAKT_PHONE_NUMBER_ID: z.string().optional(),
+
+  WEBHOOK_VERIFY_TOKEN: z.string().optional(),
 
   USE_FALLBACK_WHEN_ERROR: z
     .string()
@@ -28,6 +30,6 @@ if (!parsed.success) {
 
 export const env = (parsed.success ? parsed.data : (EnvSchema.parse({}) as any)) as z.infer<typeof EnvSchema>;
 
-export const numericPort = Number(env.PORT) || 4000;
+export const numericPort = Number(env.PORT) || 8000;
 
 

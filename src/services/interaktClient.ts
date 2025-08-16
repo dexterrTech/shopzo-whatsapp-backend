@@ -13,8 +13,13 @@ export class InteraktClient {
 
   constructor({ baseURL, wabaId, accessToken }: InteraktClientDeps = {}) {
     this.wabaId = wabaId ?? env.INTERAKT_WABA_ID;
+    
+    // Use Facebook Graph API instead of Interakt API
+     const apiBaseURL = baseURL ?? "https://graph.facebook.com/v22.0";
+    //const apiBaseURL = baseURL ?? "https://amped-express.interakt.ai/api/v17.0";
+    
     const http = axios.create({
-      baseURL: baseURL ?? env.INTERAKT_BASE_URL,
+      baseURL: apiBaseURL,
       timeout: 15_000,
     });
 
@@ -22,11 +27,7 @@ export class InteraktClient {
       const token = accessToken ?? env.INTERAKT_ACCESS_TOKEN;
       if (token) {
         config.headers = config.headers ?? {};
-        config.headers["x-access-token"] = token;
-      }
-      if (this.wabaId) {
-        config.headers = config.headers ?? {};
-        config.headers["x-waba-id"] = this.wabaId;
+        config.headers["Authorization"] = `Bearer ${token}`;
       }
       config.headers = config.headers ?? {};
       config.headers["Content-Type"] = "application/json";
@@ -41,6 +42,7 @@ export class InteraktClient {
       // Force an error to trigger fallback upstream
       throw new Error("Missing INTERAKT_WABA_ID");
     }
+    // Facebook Graph API endpoint for phone numbers
     const url = `/${this.wabaId}/phone_numbers`;
     const res = await this.http.get(url, { params });
     return res.data;
@@ -55,6 +57,7 @@ export class InteraktClient {
   }) {
     const wabaId = this.wabaId;
     if (!wabaId) throw new Error("Missing INTERAKT_WABA_ID");
+    // Facebook Graph API endpoint for templates
     const url = `/${wabaId}/message_templates`;
     const res = await this.http.post(url, body);
     return res.data;
@@ -63,6 +66,7 @@ export class InteraktClient {
   async getTemplates(params?: { fields?: string; limit?: number }) {
     const wabaId = this.wabaId;
     if (!wabaId) throw new Error("Missing INTERAKT_WABA_ID");
+    // Facebook Graph API endpoint for templates
     const url = `/${wabaId}/message_templates`;
     const res = await this.http.get(url, { params });
     return res.data;
@@ -71,20 +75,22 @@ export class InteraktClient {
   async getTemplateById(templateId: string) {
     const wabaId = this.wabaId;
     if (!wabaId) throw new Error("Missing INTERAKT_WABA_ID");
-    const url = `/${wabaId}/message_templates/id/${templateId}`;
+    // Facebook Graph API endpoint for specific template
+    const url = `/${wabaId}/message_templates/${templateId}`;
     const res = await this.http.get(url);
     return res.data;
   }
 
   async getContacts(params?: { limit?: number; after?: string }) {
-    // Many Interakt APIs expose contacts without WABA id in the path, relying on headers
-    const res = await this.http.get(`/contacts`, { params });
-    return res.data;
+    // Facebook Graph API doesn't have a direct contacts endpoint like Interakt
+    // This would need to be implemented differently for Facebook
+    throw new Error("Contacts endpoint not available in Facebook Graph API");
   }
 
   async sendMediaTemplate(body: any) {
     const phoneNumId = env.INTERAKT_PHONE_NUMBER_ID;
     if (!phoneNumId) throw new Error("Missing INTERAKT_PHONE_NUMBER_ID");
+    // Facebook Graph API endpoint for sending messages
     const url = `/${phoneNumId}/messages`;
     const res = await this.http.post(url, body);
     return res.data;
@@ -111,6 +117,27 @@ export class InteraktClient {
   }) {
     const phoneNumId = env.INTERAKT_PHONE_NUMBER_ID;
     if (!phoneNumId) throw new Error("Missing INTERAKT_PHONE_NUMBER_ID");
+    // Facebook Graph API endpoint for sending messages
+    const url = `/${phoneNumId}/messages`;
+    const res = await this.http.post(url, body);
+    return res.data;
+  }
+
+  async sendTestTemplate(body: {
+    messaging_product: "whatsapp";
+    to: string;
+    type: "template";
+    template: {
+      name: string;
+      language: {
+        code: string;
+      };
+    };
+  }) {
+    const phoneNumId = env.INTERAKT_PHONE_NUMBER_ID;
+    if (!phoneNumId) throw new Error("Missing INTERAKT_PHONE_NUMBER_ID");
+    
+    // Use Facebook Graph API format as shown in sir's curl command
     const url = `/${phoneNumId}/messages`;
     const res = await this.http.post(url, body);
     return res.data;
