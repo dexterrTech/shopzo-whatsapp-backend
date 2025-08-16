@@ -190,9 +190,9 @@ INTERAKT_BASE_URL=https://api.interakt.ai
    ```
 
 4. **Access Application**:
-   - API: http://localhost:8000
-   - Health Check: http://localhost:8000/health
-   - API Docs: http://localhost:8000/docs
+   - API: http://localhost:8080
+   - Health Check: http://localhost:8080/health
+   - API Docs: http://localhost:8080/docs
 
 ### Docker Commands
 
@@ -201,7 +201,7 @@ INTERAKT_BASE_URL=https://api.interakt.ai
 docker build -t shopzo-whatsapp-backend .
 
 # Run container directly
-docker run -p 8000:8000 --env-file .env shopzo-whatsapp-backend
+docker run -p 8080:8080 --env-file .env shopzo-whatsapp-backend
 
 # Using docker-compose
 docker-compose up -d        # Start in background
