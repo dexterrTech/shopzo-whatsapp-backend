@@ -25,7 +25,7 @@ const router = Router();
 
 /**
  * @openapi
- * /api/interakt/webhook:
+ * /webhook:
  *   get:
  *     tags:
  *       - Webhook
@@ -74,7 +74,7 @@ router.get("/webhook", (req, res) => {
 
 /**
  * @openapi
- * /api/interakt/webhook:
+ * /webhook:
  *   post:
  *     tags:
  *       - Webhook

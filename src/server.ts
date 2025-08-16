@@ -28,6 +28,20 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString() });
 });
 
+// Test route to verify API is working
+app.get("/api/test", (_req, res) => {
+  res.json({ 
+    message: "API is working!", 
+    timestamp: new Date().toISOString(),
+    routes: [
+      "/api/interakt/*",
+      "/api/contacts/*", 
+      "/api/campaigns/*",
+      "/api/phone-numbers/*"
+    ]
+  });
+});
+
 // Debug: Log route registration
 console.log("Registering routes...");
 
@@ -43,6 +57,20 @@ console.log("Routes registered successfully");
 
 // Debug: Log Swagger spec
 console.log("Swagger spec generated:", Object.keys((swaggerSpec as any).paths || {}).length, "endpoints");
+
+// Check if required environment variables are set
+const requiredEnvVars = [
+  'INTERAKT_WABA_ID',
+  'INTERAKT_ACCESS_TOKEN', 
+  'INTERAKT_PHONE_NUMBER_ID',
+  'WEBHOOK_VERIFY_TOKEN'
+];
+
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+if (missingEnvVars.length > 0) {
+  console.warn("⚠️  Missing environment variables:", missingEnvVars);
+  console.warn("Some features may not work properly in development mode");
+}
 
 // Swagger docs
 app.get("/docs.json", (_req, res) => {
