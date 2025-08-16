@@ -8,7 +8,7 @@ const options: swaggerJSDoc.Options = {
     info: {
       title: "WhatsApp Dashboard API",
       version: "1.0.0",
-      description: "API for WhatsApp Dashboard with Interakt integration",
+      description: "API for WhatsApp Dashboard with Interakt integration new",
     },
     servers: [{ url: `http://localhost:${env.PORT || 8000}` }],
     components: {
