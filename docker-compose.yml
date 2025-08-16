@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  shopzo-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shopzo-whatsapp-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http = require('http'); const options = { host: 'localhost', port: 8000, path: '/health', timeout: 2000 }; const req = http.request(options, (res) => { if (res.statusCode === 200) process.exit(0); else process.exit(1); }); req.on('error', () => process.exit(1)); req.end();"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - shopzo-network
+
+  # Optional: PostgreSQL database service (uncomment if you want to run DB in Docker)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: shopzo-postgres
+  #   environment:
+  #     POSTGRES_DB: shopzo_whatsapp
+  #     POSTGRES_USER: shopzo_user
+  #     POSTGRES_PASSWORD: shopzo_password
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - shopzo-network
+  #   restart: unless-stopped
+
+networks:
+  shopzo-network:
+    driver: bridge
+
+# Uncomment if using PostgreSQL service
+# volumes:
+#   postgres_data:

@@ -162,6 +162,84 @@ INTERAKT_BASE_URL=https://api.interakt.ai
 - **Run Migrations**: `npm run migrate`
 - **Seed Database**: `npm run seed`
 
+## Docker Setup
+
+### Prerequisites
+- Docker and Docker Compose installed
+
+### Quick Start with Docker
+
+1. **Clone and Navigate**:
+   ```bash
+   cd shopzo-whatsapp-backend
+   ```
+
+2. **Setup Environment**:
+   ```bash
+   cp .env.example .env
+   # Edit .env file with your actual values
+   ```
+
+3. **Build and Run**:
+   ```bash
+   # Build and start the container
+   docker-compose up --build
+
+   # Or run in background
+   docker-compose up -d --build
+   ```
+
+4. **Access Application**:
+   - API: http://localhost:8000
+   - Health Check: http://localhost:8000/health
+   - API Docs: http://localhost:8000/docs
+
+### Docker Commands
+
+```bash
+# Build the image
+docker build -t shopzo-whatsapp-backend .
+
+# Run container directly
+docker run -p 8000:8000 --env-file .env shopzo-whatsapp-backend
+
+# Using docker-compose
+docker-compose up -d        # Start in background
+docker-compose down         # Stop containers
+docker-compose logs -f      # View logs
+docker-compose restart      # Restart services
+```
+
+### Environment Setup
+
+The Docker setup requires a `.env` file. Copy `.env.example` to `.env` and fill in your actual values:
+
+```bash
+cp .env.example .env
+```
+
+Required variables include:
+- `INTERAKT_WABA_ID` - Your WhatsApp Business Account ID
+- `INTERAKT_ACCESS_TOKEN` - Your access token
+- `INTERAKT_PHONE_NUMBER_ID` - Your phone number ID
+- Database connection details (if using external DB)
+
+### Docker Features
+
+- **Multi-stage build**: Optimized production image
+- **Health checks**: Automatic container health monitoring
+- **Non-root user**: Runs with limited privileges for security
+- **Hot reload**: Development setup with volume mounting
+- **Environment variables**: Easy configuration management
+
+### Production Deployment
+
+For production, ensure you:
+1. Set `NODE_ENV=production` in your `.env`
+2. Use proper secrets management
+3. Configure external database connection
+4. Set up proper logging and monitoring
+
 ## Sample Data
 
 The seed script will automatically insert sample contacts:
