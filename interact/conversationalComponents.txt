@@ -1,0 +1,203 @@
+Conversational Components
+Conversational components are in-chat features that you can enable on business phone numbers. They make it easier for WhatsApp users to interact with your business. You can configure easy-to-use commands, provide pre-written ice breakers that users can tap, and greet first time users with a welcome message.
+
+Limitations
+If a WhatsApp user taps a universal link (i.e. wa.me link) configured with pre-filled text, the user interfaces for ice breakers are automatically dismissed.
+
+Welcome Messages
+You can be notified by webhook whenever a WhatsApp user opens a chat with you for the first time. This can be useful if you want to reply to these users with a special welcome message of your own design.
+
+Welcome Messages are great for service interactions, such as customer support or account servicing. For example, you can embed a WhatsApp button on your app or website. When users tap the button, they will be redirected to WhatsApp where they will receive a welcome message that provides context on how they can interact with you.
+
+
+If you enable this feature and a user messages you, the WhatsApp client checks for an existing message thread between the user and your business phone number. If there is none, the client triggers a messages webhook with type set to request_welcome. You can then respond to the user with your own welcome message.
+
+The request_welcome webhook triggers a customer service window which allows your business to send free-form messages when responding to customers.
+
+Ice Breakers
+Ice Breakers are customizable, tappable text strings that appear in a message thread the first time you chat with a user. For example, "Plan a trip" or "Create a workout plan".
+
+Ice Breakers are great for service interactions, such as customer support or account servicing. For example, you can embed a WhatsApp button on your app or website. When users tap the button, they will be redirected to WhatsApp where they can choose from a set of customizable prompts, showing them how to interact with your services.
+
+
+You can configure up to 4 ice breakers on a business phone number. Each ice breaker can have a maximum of 80 characters. Emojis are not supported.
+
+When a user taps an ice breaker, it triggers a standard received message webhook with the ice breaker string assigned to the body property in the payload. If the user attempts to message you instead of tapping an ice breaker, the keyboard will appear as an overlay, but it can be dismissed to see the ice breaker menu again.
+
+Commands
+Commands are text strings that WhatsApp users can see by typing a forward slash in a message thread with your business.
+
+
+Commands are composed of the command itself and a hint, which gives the user an idea of what can happen when they use the command. For example, you could define the command:
+
+/imagine - Create images using a text prompt
+
+When a WhatsApp user types, /imagine cars racing on Mars, it would trigger a received message webhook with that exact text string assigned to the body property. You could then generate and return an image of cars racing on the planet Mars.
+
+You can define up to 30 commands. Each command has a maximum of 32 characters, and each hint has a maximum of 256 characters. Emojis are not supported.
+
+The Conversational Components API has two endpoints:
+
+POST /conversational_automation which is used to configure conversational components on a given phone number.
+
+GET //conversational_automation which returns the current values for the enable_welcome_message, commands, and promptsfields on a given phone number.
+
+POST
+Welcome Message (Enable/Disable)
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/conversational_automation
+Configure Conversational Components Via The API
+You can configure Conversational Components on a given phone number by calling the POST endpoint.
+
+Request Syntax
+// Enable or disable the Welcome Message for the given phone number ID
+POST /<PHONE_NUMBER_ID>/conversational_automation?enable_welcome_message=<ENABLE_DISABLE>
+// Configure Commands with names and descriptions
+POST /<PHONE_NUMBER_ID>/conversational_automation?commands=<COMMAND_LIST>
+// Configure Prompts
+POST /<PHONE_NUMBER_ID>/conversational_automation?prompts=<PROMPT>
+
+Table
+Placeholder	Description	Sample Value
+Integer	Required.
+
+
+
+A phone number ID on a WhatsApp Business account.	+12784358810
+Boolean	Optional.
+
+
+
+A boolean for enabling or disabling a welcome message on the phone number.	true
+JSON	Optional.
+
+
+
+A list of commands to be configured.	json<br>"commands": {<br> "command_name": "generate"<br> "command_description": "Create a new image",<br> “command_name”: “rethink”<br> “command_description”: “Generate new images from existing images”,<br>} <br><br>
+List of String	Optional.
+
+
+
+The prompt(s) to be configured.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+{"enable_welcome_message":"true/false"}
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/conversational_automation' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json' \
+--data '{"enable_welcome_message":"true/false"}'
+
+{
+  "success": true
+}
+
+POST
+Conversational Automation
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/conversational_automation
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+Body
+raw
+curl --location 'https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID/conversational_automation' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-Type: application/json' \
+--data '{
+   "enable_welcome_message": true,
+   "commands": [
+     {
+       "command_name": "tickets",
+       "command_description": "Book flight tickets"
+     },
+     {
+       "command_name": "hotel",
+       "command_description": "Book hotel"
+     }
+   ],
+ "prompts": ["Book a flight","plan a vacation"]
+}'
+{
+  "success": true
+}
+{
+   "enable_welcome_message": true,
+   "commands": [
+     {
+       "command_name": "tickets",
+       "command_description": "Book flight tickets"
+     },
+     {
+       "command_name": "hotel",
+       "command_description": "Book hotel"
+     }
+   ],
+ "prompts": ["Book a flight","plan a vacation"]
+}
+GET
+Fetch Conversation Configuration
+https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID?fields=conversational_automation
+View The Current Configuration Via The API
+You can view the current configuration of Conversational Components on a given phone number by calling the GET endpoint.
+
+Request Syntax
+
+GET  /<PHONE_NUMBER_ID>?fields=conversational_automation
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-type
+application/json
+
+PARAMS
+fields
+conversational_automation
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/YOUR_PHONE_NUMBER_ID?fields=conversational_automation' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json'
+
+
+{
+  "conversational_automation": {
+    "enable_welcome_message": true,
+    "id": "782334283992155"
+  },
+  "id": "249189624947841"
+}
+

@@ -15,8 +15,8 @@ export class InteraktClient {
     this.wabaId = wabaId ?? env.INTERAKT_WABA_ID;
     
     // Use Facebook Graph API instead of Interakt API
-     const apiBaseURL = baseURL ?? "https://graph.facebook.com/v22.0";
-    //const apiBaseURL = baseURL ?? "https://amped-express.interakt.ai/api/v17.0";
+    const apiBaseURL = baseURL ?? env.FACEBOOK_GRAPH_API_BASE_URL;
+    //const apiBaseURL = baseURL ?? env.INTERAKT_AMPED_EXPRESS_BASE_URL;
     
     const http = axios.create({
       baseURL: apiBaseURL,
@@ -140,6 +140,52 @@ export class InteraktClient {
     // Use Facebook Graph API format as shown in sir's curl command
     const url = `/${phoneNumId}/messages`;
     const res = await this.http.post(url, body);
+    return res.data;
+  }
+
+  // NEW: Message Analytics API
+  async getMessageAnalytics(params: {
+    start?: number; // Unix timestamp
+    end?: number;   // Unix timestamp
+    granularity?: "DAY" | "MONTH" | "YEAR";
+    fields?: string;
+  }) {
+    const wabaId = this.wabaId;
+    if (!wabaId) throw new Error("Missing INTERAKT_WABA_ID");
+
+    // Build the analytics query string
+    let fields = params.fields || "analytics";
+    
+    if (params.start && params.end) {
+      fields += `.start(${params.start}).end(${params.end})`;
+    }
+    
+    if (params.granularity) {
+      fields += `.granularity(${params.granularity})`;
+    }
+
+    // Use Interakt Amped Express API for analytics
+    const analyticsHttp = axios.create({
+      baseURL: env.INTERAKT_AMPED_EXPRESS_BASE_URL,
+      timeout: 15_000,
+    });
+
+    analyticsHttp.interceptors.request.use((config) => {
+      const token = env.INTERAKT_ACCESS_TOKEN;
+      if (token) {
+        config.headers = config.headers ?? {};
+        config.headers["x-access-token"] = token;
+        config.headers["x-waba-id"] = wabaId;
+      }
+      config.headers = config.headers ?? {};
+      config.headers["Content-Type"] = "application/json";
+      return config;
+    });
+
+    const url = `/${wabaId}`;
+    const res = await analyticsHttp.get(url, { 
+      params: { fields } 
+    });
     return res.data;
   }
 }

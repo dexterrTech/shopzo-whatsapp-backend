@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
+import { env } from "../config/env";
 
 const router = Router();
 
@@ -18,6 +19,8 @@ const router = Router();
  *     description: Send WhatsApp template messages
  *   - name: Chat Message Send
  *     description: Send WhatsApp session/chat messages
+ *   - name: Analytics
+ *     description: WhatsApp message analytics and metrics
  */
 
 /**
@@ -88,26 +91,48 @@ router.get("/webhook", (req, res) => {
  *         description: Webhook received successfully
  */
 // POST /api/interakt/webhook - Receive webhook updates
-router.post("/webhook", (req, res) => {
+router.post("/webhook", async (req, res) => {
   const body = req.body;
+  console.log("Webhook received:", JSON.stringify(body, null, 2));
 
-  // Handle different webhook events
-  if (body.object === "whatsapp_business_account") {
-    body.entry?.forEach((entry: any) => {
-      entry.changes?.forEach((change: any) => {
-        if (change.value?.messages) {
-          // Handle incoming messages
-          console.log("Incoming message:", change.value.messages);
-        }
-        if (change.value?.statuses) {
-          // Handle message status updates
-          console.log("Message status update:", change.value.statuses);
-        }
+  try {
+    // Handle different webhook events
+    if (body.object === "whatsapp_business_account") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach((change: any) => {
+          if (change.value?.messages) {
+            // Handle incoming messages
+            console.log("Incoming message:", change.value.messages);
+          }
+          if (change.value?.statuses) {
+            // Handle message status updates
+            console.log("Message status update:", change.value.statuses);
+          }
+        });
       });
-    });
-  }
+    }
 
-  res.sendStatus(200);
+    // Handle tech partner events
+    if (body.object === "tech_partner") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach((change: any) => {
+          if (change.value?.event === "PARTNER_ADDED") {
+            console.log("PARTNER_ADDED event received:", change.value);
+            
+            // Trigger onboarding process
+            // You can either handle it here or call the separate endpoint
+            // For now, we'll just log it and let the separate endpoint handle it
+            console.log("Tech partner onboarding should be triggered for WABA:", change.value.waba_info?.waba_id);
+          }
+        });
+      });
+    }
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("Error processing webhook:", error);
+    res.sendStatus(500);
+  }
 });
 
 /**
@@ -1183,6 +1208,455 @@ router.post("/session-messages", async (req, res, next) => {
     });
 
     res.status(202).json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/tech-partner-onboarding:
+ *   post:
+ *     tags:
+ *       - Webhook
+ *     summary: Tech Partner Onboarding
+ *     description: Handles tech partner onboarding when PARTNER_ADDED event is received from Meta. This endpoint can be called manually if the webhook event is not received within 5-7 minutes.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - entry
+ *             properties:
+ *               entry:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     changes:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           value:
+ *                             type: object
+ *                             properties:
+ *                               event:
+ *                                 type: string
+ *                                 enum: [PARTNER_ADDED]
+ *                               waba_info:
+ *                                 type: object
+ *                                 properties:
+ *                                   waba_id:
+ *                                     type: string
+ *                                   solution_id:
+ *                                     type: string
+ *               object:
+ *                 type: string
+ *                 enum: [tech_partner]
+ *     responses:
+ *       200:
+ *         description: Onboarding completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 event:
+ *                   type: string
+ *                   enum: [WABA_ONBOARDED]
+ *                 isv_name_token:
+ *                   type: string
+ *                 waba_id:
+ *                   type: string
+ *                 phone_number_id:
+ *                   type: string
+ */
+// POST /api/interakt/tech-partner-onboarding - Tech Partner Onboarding API
+router.post("/tech-partner-onboarding", async (req, res, next) => {
+  try {
+    const bodySchema = z.object({
+      entry: z.array(z.object({
+        changes: z.array(z.object({
+          value: z.object({
+            event: z.literal("PARTNER_ADDED"),
+            waba_info: z.object({
+              waba_id: z.string(),
+              solution_id: z.string()
+            })
+          })
+        }))
+      })),
+      object: z.literal("tech_partner")
+    });
+
+    const body = bodySchema.parse(req.body);
+    
+    // Extract WABA info
+    const wabaInfo = body.entry[0]?.changes[0]?.value?.waba_info;
+    
+    if (!wabaInfo) {
+      return res.status(400).json({ error: "Invalid webhook payload" });
+    }
+
+    // Call Interakt's API to trigger onboarding
+    const onboardingResponse = await withFallback({
+      feature: "techPartnerOnboarding",
+      attempt: async () => {
+        const response = await fetch(`${env.INTERAKT_API_BASE_URL}/v1/organizations/tp-signup/`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.INTERAKT_ACCESS_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+          throw new Error(`Interakt API error: ${response.status} ${response.statusText}`);
+        }
+
+        return await response.json();
+      },
+      fallback: () => ({
+        event: "WABA_ONBOARDED",
+        isv_name_token: "mock-token-" + Math.random().toString(36).slice(2, 8),
+        waba_id: wabaInfo.waba_id,
+        phone_number_id: "mock-phone-" + Math.random().toString(36).slice(2, 8),
+        fallback: true
+      })
+    });
+
+    console.log("Tech partner onboarding completed:", onboardingResponse);
+    res.json(onboardingResponse);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook-url:
+ *   post:
+ *     tags:
+ *       - Webhook
+ *     summary: Add/Update Webhook URL
+ *     description: Configures the webhook URL for a specific WABA (WhatsApp Business Account) to receive real-time updates from Meta.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - waba_id
+ *               - webhook_url
+ *               - verify_token
+ *             properties:
+ *               waba_id:
+ *                 type: string
+ *                 description: WhatsApp Business Account ID
+ *               webhook_url:
+ *                 type: string
+ *                 description: Webhook URL to receive updates
+ *               verify_token:
+ *                 type: string
+ *                 description: Verification token for webhook security
+ *     responses:
+ *       200:
+ *         description: Webhook URL configured successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ */
+// POST /api/interakt/webhook-url - Add/Update Webhook URL
+router.post("/webhook-url", async (req, res, next) => {
+  try {
+    const bodySchema = z.object({
+      waba_id: z.string(),
+      webhook_url: z.string().url(),
+      verify_token: z.string()
+    });
+
+    const { waba_id, webhook_url, verify_token } = bodySchema.parse(req.body);
+
+    const response = await withFallback({
+      feature: "configureWebhookUrl",
+      attempt: async () => {
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${waba_id}/subscribed_apps`, {
+          method: 'POST',
+          headers: {
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+            'x-waba-id': waba_id,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            override_callback_uri: webhook_url,
+            verify_token: verify_token
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Webhook configuration error: ${response.status} ${response.statusText}`);
+        }
+
+        return await response.json();
+      },
+      fallback: () => ({
+        success: true,
+        message: "Webhook URL configured successfully (fallback mode)",
+        waba_id,
+        webhook_url,
+        fallback: true
+      })
+    });
+
+    console.log("Webhook URL configured:", response);
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/analytics:
+ *   get:
+ *     tags:
+ *       - Analytics
+ *     summary: Get Message Analytics
+ *     description: Retrieves WhatsApp message analytics and metrics from Interakt Amped Express API. This is the primary analytics endpoint for getting message delivery, read receipts, and other performance metrics.
+ *     parameters:
+ *       - in: query
+ *         name: start
+ *         schema:
+ *           type: integer
+ *         description: Start timestamp (Unix timestamp)
+ *         example: 1693506600
+ *       - in: query
+ *         name: end
+ *         schema:
+ *           type: integer
+ *         description: End timestamp (Unix timestamp)
+ *         example: 1706725800
+ *       - in: query
+ *         name: granularity
+ *         schema:
+ *           type: string
+ *           enum: [DAY, MONTH, YEAR]
+ *         description: Time granularity for analytics
+ *         example: MONTH
+ *       - in: query
+ *         name: fields
+ *         schema:
+ *           type: string
+ *         description: Custom fields query string
+ *         example: "analytics.start(1693506600).end(1706725800).granularity(MONTH)"
+ *     responses:
+ *       200:
+ *         description: Analytics data retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 analytics:
+ *                   type: object
+ *                   properties:
+ *                     data:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           date:
+ *                             type: string
+ *                             format: date
+ *                           delivered:
+ *                             type: integer
+ *                           read:
+ *                             type: integer
+ *                           sent:
+ *                             type: integer
+ *                           failed:
+ *                             type: integer
+ *                 fallback:
+ *                   type: boolean
+ *                   description: Indicates if fallback data was used
+ */
+// GET /api/interakt/analytics - Message Analytics API
+router.get("/analytics", async (req, res, next) => {
+  try {
+    const querySchema = z.object({
+      start: z.coerce.number().optional(),
+      end: z.coerce.number().optional(),
+      granularity: z.enum(["DAY", "MONTH", "YEAR"]).optional(),
+      fields: z.string().optional(),
+    });
+
+    const query = querySchema.parse(req.query);
+
+    const data = await withFallback({
+      feature: "getMessageAnalytics",
+      attempt: () => interaktClient.getMessageAnalytics(query),
+      fallback: () => ({
+        analytics: {
+          data: [
+            {
+              date: "2024-01-01",
+              delivered: 1250,
+              read: 980,
+              sent: 1300,
+              failed: 50,
+            },
+            {
+              date: "2024-01-02",
+              delivered: 1350,
+              read: 1100,
+              sent: 1400,
+              failed: 50,
+            },
+            {
+              date: "2024-01-03",
+              delivered: 1200,
+              read: 950,
+              sent: 1250,
+              failed: 50,
+            },
+          ],
+          summary: {
+            total_sent: 3950,
+            total_delivered: 3800,
+            total_read: 3030,
+            total_failed: 150,
+            delivery_rate: 96.2,
+            read_rate: 79.7,
+          },
+        },
+        fallback: true,
+      }),
+    });
+
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/analytics/summary:
+ *   get:
+ *     tags:
+ *       - Analytics
+ *     summary: Get Analytics Summary
+ *     description: Gets a summary of message analytics with key metrics like delivery rate, read rate, and total messages.
+ *     parameters:
+ *       - in: query
+ *         name: start
+ *         schema:
+ *           type: integer
+ *         description: Start timestamp (Unix timestamp)
+ *         example: 1693506600
+ *       - in: query
+ *         name: end
+ *         schema:
+ *           type: integer
+ *         description: End timestamp (Unix timestamp)
+ *         example: 1706725800
+ *     responses:
+ *       200:
+ *         description: Analytics summary retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total_sent:
+ *                       type: integer
+ *                     total_delivered:
+ *                       type: integer
+ *                     total_read:
+ *                       type: integer
+ *                     total_failed:
+ *                       type: integer
+ *                     delivery_rate:
+ *                       type: number
+ *                       format: float
+ *                     read_rate:
+ *                       type: number
+ *                       format: float
+ */
+// GET /api/interakt/analytics/summary - Analytics Summary
+router.get("/analytics/summary", async (req, res, next) => {
+  try {
+    const querySchema = z.object({
+      start: z.coerce.number().optional(),
+      end: z.coerce.number().optional(),
+    });
+
+    const query = querySchema.parse(req.query);
+
+    const data = await withFallback({
+      feature: "getAnalyticsSummary",
+      attempt: async () => {
+        const analytics = await interaktClient.getMessageAnalytics({
+          ...query,
+          fields: "analytics",
+        });
+        
+        // Calculate summary from analytics data
+        const summary = {
+          total_sent: 0,
+          total_delivered: 0,
+          total_read: 0,
+          total_failed: 0,
+          delivery_rate: 0,
+          read_rate: 0,
+        };
+
+        if (analytics.analytics?.data) {
+          analytics.analytics.data.forEach((item: any) => {
+            summary.total_sent += item.sent || 0;
+            summary.total_delivered += item.delivered || 0;
+            summary.total_read += item.read || 0;
+            summary.total_failed += item.failed || 0;
+          });
+
+          summary.delivery_rate = summary.total_sent > 0 
+            ? (summary.total_delivered / summary.total_sent) * 100 
+            : 0;
+          summary.read_rate = summary.total_delivered > 0 
+            ? (summary.total_read / summary.total_delivered) * 100 
+            : 0;
+        }
+
+        return { summary };
+      },
+      fallback: () => ({
+        summary: {
+          total_sent: 3950,
+          total_delivered: 3800,
+          total_read: 3030,
+          total_failed: 150,
+          delivery_rate: 96.2,
+          read_rate: 79.7,
+        },
+        fallback: true,
+      }),
+    });
+
+    res.json(data);
   } catch (err) {
     next(err);
   }

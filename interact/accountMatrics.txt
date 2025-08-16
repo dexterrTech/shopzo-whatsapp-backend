@@ -1,0 +1,526 @@
+Partner API Documentation
+The Interakt Partner API Documentation provides comprehensive guidance and resources for developers looking to integrate with Interakt's services as partners. It outlines the functionalities, endpoints, and protocols necessary for seamless integration, enabling partners to leverage Interakt's capabilities effectively within their own platforms or applications.
+
+Account Metrics
+This document outlines the procedures for accessing analytics related to messaging, conversations, and templates for a WhatsApp Business Account (WABA). This includes metrics such as the volume of messages sent from a business phone number, the quantity of conversations, associated costs, and the frequency of template usage.
+
+GET
+Get Message Analytics
+https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?fields=analytics.start(1693506600).end(1706725800).granularity(MONTH)%0A
+The analytics field provides the number and type of messages sent and delivered by the phone numbers associated with a specific WABA.
+
+When calling /{whatsapp-business-account-ID}?fields=analytics.{filtering-parameters}, you can attach the following parameters.
+
+Analytics Parameters
+Table
+Name	Description
+start
+
+type: UNIX Timestamp	Required.
+
+The start date for the date range you are retrieving analytics for.
+end
+
+type: UNIX Timestamp	Required.
+
+The end date for the date range you are retrieving analytics for.
+granularity
+
+type: String
+
+
+
+
+Supported Options	Required.
+
+The granularity by which you would like to retrieve the analytics.
+
+- HALF_HOUR
+
+- DAY
+
+- MONTH
+phone_numbers
+
+type: Array	Optional.
+
+An array of phone numbers for which you would like to retrieve analytics. If not provided, all phone numbers added to your WABA are included.
+product_types
+
+type: Array	Optional.
+
+The types of messages (notification messages and/or customer support messages) for which you want to retrieve notifications. Provide an array and include 0 for notification messages, and 2 for customer support messages. If not provided, analytics will be returned for all messages together.
+country_codes
+
+type: Array	Optional.
+
+The countries for which you would like to retrieve analytics. Provide an array with 2 letter country codes for the countries you would like to include. If not provided, analytics will be returned for all countries you have communicated with.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-Type
+application/json
+
+PARAMS
+fields
+analytics.start(1693506600).end(1706725800).granularity(MONTH)%0A
+curl --location 'https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?fields=analytics.start(1693506600).end(1706725800).granularity(MONTH)%250A' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json' \
+--data ''   
+{
+  "analytics": {
+    "phone_numbers": [
+      "912240289385"
+    ],
+    "granularity": "MONTH",
+    "data_points": [
+      {
+        "start": 1693506600,
+        "end": 1696098600,
+        "sent": 2497742,
+        "delivered": 2395663
+      },
+      {
+        "start": 1696098600,
+        "end": 1698777000,
+        "sent": 4366872,
+        "delivered": 4171084
+      },
+      {
+        "start": 1698777000,
+        "end": 1701369000,
+        "sent": 4824642,
+        "delivered": 4604941
+      },
+      {
+        "start": 1701369000,
+        "end": 1704047400,
+        "sent": 5404653,
+        "delivered": 5139640
+      },
+      {
+        "start": 1704047400,
+        "end": 1706725800,
+        "sent": 4430091,
+        "delivered": 4278583
+      }
+    ]
+  },
+  "id": "115344761664057"
+}
+
+
+
+GET
+Get Conversation Analytics
+https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?fields=conversation_analytics.start(1693506600).end(1706725800).granularity(MONTHLY).phone_numbers([]).dimensions(["CONVERSATION_CATEGORY","CONVERSATION_TYPE","COUNTRY","PHONE"])
+The conversation_analytics field provides cost and conversation information for a specific WABA. When calling /{whatsapp-business-account-ID}?fields=conversation_analytics.{filtering-parameters}, you can attach the following parameters.
+
+Conversation Analytics Parameters
+Table
+Name	Description
+start
+
+type: UNIX Timestamp	Required.
+
+The start date for the date range you are retrieving analytics for.
+end
+
+type: UNIX Timestamp	Required.
+
+The end date for the date range you are retrieving analytics for.
+granularity
+
+type: String
+
+
+Supported Options	Required.
+
+The granularity by which you would like to retrieve the analytics.
+
+- HALF_HOUR
+
+- DAILY
+
+- MONTHLY
+phone_numbers
+
+type: Array	Optional.
+
+An array of phone numbers for which you would like to retrieve analytics. If not provided, all phone numbers added to your WABA are included.
+metric_types
+
+
+
+
+
+
+Supported Options {#supported}	Optional.
+
+List of metrics you would like to receive. If you send an empty list, we return results for all metric types.
+
+
+- COST: Includes approximate charges for that time range, in the WABA’s currency.
+
+- CONVERSATION: Includes the count of conversations for that time range.
+
+
+As of July 1, 2023, COST is no longer shown for businesses who bill through a Solution Partner. To understand your charges, please reach out to your partner. If you bill through a partner, this is the behavior to expect:
+
+1. If no metric_types are specified in your request, only CONVERSATION is returned
+
+2. If only CONVERSATION is specified, only CONVERSATION is returned
+
+3. If only COST is specified, the following exception is returned:
+
+- Title: “Cost not available”
+
+- Message: “Cost is no longer shown for businesses who bill through a partner (i.e., BSP). To understand your charges, please reach out to your partner.”
+
+
+If you query a time period that includes dates on or after July 1, 2023, (e.g., May 1, 2023 through August 1, 2023), the response will include the exception above.
+
+There is no change for partners when querying the _**conversation_analytics**_ endpoint.
+conversation_categories
+
+
+
+
+
+
+
+
+Supported Options	Optional.
+
+List of conversation categories. If you send an empty list, we return results for all conversation categories.
+
+- AUTHENTICATION
+
+- MARKETING
+
+- SERVICE
+
+- UTILITY
+conversation_types
+
+
+
+
+
+
+
+
+Supported Options	Optional.
+
+List of conversation types. If you send an empty list, we return results for all conversation types.
+
+- FREE_ENTRY: Conversations originating from a free entry point.
+
+- FREE_TIER: Conversations within the monthly free tier.
+
+- REGULAR: Any conversations that did not originate from a free entry point or are above the monthly free tier allotment.
+conversation_directions
+
+
+
+
+
+
+
+Supported Options	Optional.
+
+List of conversation directions. If you send an empty list, we return results for all conversation directions.
+
+- BUSINESS_INITIATED: Conversations initiated by the business.
+
+- USER_INITIATED: Conversations initiated by an end user/customer.
+dimensions
+
+
+
+
+
+
+
+
+
+
+
+Supported Options	Optional.
+
+List of breakdowns you would like to apply to your metrics. If you send an empty list, we return results without any breakdowns.
+
+
+- CONVERSATION_CATEGORY
+
+- CONVERSATION_DIRECTION
+
+- CONVERSATION_TYPE
+
+- COUNTRY
+
+- PHONE
+
+Analytics data is approximate and may differ from what’s shown on invoices due to small variations in data processing.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-Type
+application/json
+
+PARAMS
+fields
+conversation_analytics.start(1693506600).end(1706725800).granularity(MONTHLY).phone_numbers([]).dimensions(["CONVERSATION_CATEGORY","CONVERSATION_TYPE","COUNTRY","PHONE"])
+
+curl --location -g 'https://amped-express.interakt.ai/api/v17.0/waba_id?fields=conversation_analytics.start(1693506600).end(1706725800).granularity(MONTHLY).phone_numbers([]).dimensions([%22CONVERSATION_CATEGORY%22%2C%22CONVERSATION_TYPE%22%2C%22COUNTRY%22%2C%22PHONE%22])' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json'
+
+{
+    "conversation_analytics": {
+        "data": [
+            {
+                "data_points": [
+                    {
+                        "start": 1693506600,
+                        "end": 1696098600,
+                        "conversation": 1,
+                        "phone_number": "912240289385",
+                        "country": "KW",
+                        "conversation_type": "REGULAR",
+                        "conversation_category": "MARKETING",
+                        "cost": 2.4993
+                    
+    },
+    "id": "115344761664057"
+}
+POST
+Enabling Template Analytics
+https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?is_enabled_for_insights=true
+You must confirm template analytics on your WhatsApp Business Account before you can get template analytics. You can confirm template analytics using the WhatsApp Manager or the API. To confirm via API, send the following request:
+
+Once confirmed, we will begin capturing template analytics for the WhatsApp Business Account. Once confirmed, template analytics cannot be disabled.
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-Type
+application/json
+
+PARAMS
+is_enabled_for_insights
+true
+
+curl --location 'https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?is_enabled_for_insights=true' \
+--header 'x-access-token: YOUR_TOKEN' \
+--header 'x-waba-id: YOUR_WABA_ID' \
+--header 'Content-type: application/json' \
+--data ''
+
+{
+  "id": 102290129340398
+}
+GET
+Get Template Analytics
+https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?fields=template_analytics?start=1689379200%26end=1689552000%26granularity=DAILY%26metric_types=[%27SENT%27%2C%27DELIVERED%27%2C%27READ%27%2C%27CLICKED%27]%26template_ids=[1924084211297547%2C954638012257287]
+Template Analytics Parameters
+
+able
+Name	Description	Example Value
+start
+
+UNIX Timestamp	Required.
+
+
+
+The start timestamp for the date range you are retrieving analytics for. As template analytics are being provided with a daily granularity in the UTC timezone, a start timestamp other than 0:00 UTC would be corrected to its prior 0:00 UTC.	1543536000
+end
+
+UNIX Timestamp	Required.
+
+
+
+The end date for the date range you are retrieving analytics for. As template analytics are being provided with a daily granularity in the UTC timezone, an end timestamp other than 0:00 UTC would be corrected to its next 0:00 UTC.	1543708800
+granularity
+
+Enum	Required.
+
+
+
+The granularity by which you would like to retrieve the analytics. Supported values:
+
+
+
+- DAILY	DAILY
+template_ids
+
+Array of IDs	Required.
+
+
+
+An array of template IDs for which you would like to retrieve analytics for.
+
+
+
+Maximum 10.	[1924084211297547,954638012257287,969725530748535]
+metric_types
+
+Array of enums	Optional.
+
+
+
+The types of metrics which you want to retrieve. If omitted or an empty array, analytics for all metric types will be returned.
+
+
+
+Possible values:
+
+
+
+- CLICKED
+
+- DELIVERED
+
+- READ
+
+- SENT
+
+
+
+
+Clicks are only returned for URL buttons and quick-reply buttons in templates categorized as MARKETING or UTILITY.	["SENT","DELIVERED"
+curl --location -g 'https://amped-express.interakt.ai/api/v17.0/YOUR_WABA_ID?fields=template_analytics%3Fstart%3D1689379200%2526end%3D1689552000%2526granularity%3DDAILY%2526metric_types%3D[%2527SENT%2527%252C%2527DELIVERED%2527%252C%2527READ%2527%252C%2527CLICKED%2527]%2526template_ids%3D[1924084211297547%252C954638012257287]' \
+--data ''
+
+{
+  "data": [
+    {
+      "granularity": "DAILY",
+      "data_points": [
+        {
+          "template_id": "1924084211297547",
+          "start": 1689379200,
+          "end": 1689465600,
+          "sent": 0,
+          "delivered": 0,
+          "read": 0,
+          "clicked": [
+            {
+              "type": "quick_reply_button",
+              "button_content": "Tell me more",
+              "count": 3
+            },
+            {
+              "type": "quick_reply_button",
+              "button_content": "Get coupon",
+              "count": 5
+            }
+          ]
+        },
+        {
+          "template_id": "1924084211297547",
+          "start": 1689465600,
+          "end": 1689552000,
+          "sent": 0,
+          "delivered": 0,
+          "read": 0,
+          "clicked": [
+            {
+              "type": "quick_reply_button",
+              "button_content": "Tell me more",
+              "count": 73
+            },
+            {
+              "type": "quick_reply_button",
+              "button_content": "Get coupon",
+              "count": 35
+            }
+          ]
+        },
+        {
+          "template_id": "954638012257287",
+          "start": 1689379200,
+          "end": 1689465600,
+          "sent": 0,
+          "delivered": 0,
+          "read": 0,
+          "clicked": [
+            {
+              "type": "url_button",
+              "button_content": "Visit Website",
+              "count": 13
+            }
+          ]
+        },
+        {
+          "template_id": "954638012257287",
+          "start": 1689465600,
+          "end": 1689552000,
+          "sent": 0,
+          "delivered": 0,
+          "read": 0,
+          "clicked": [
+            {
+              "type": "url_button",
+              "button_content": "Visit Website",
+              "count": 12
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "paging": {
+    "cursors": {
+      "before": "MAZDZD",
+      "after": "MjQZD"
+    }
+  }
+}
+
+HEADERS
+x-access-token
+YOUR_TOKEN
+
+Enter the access token shared by us
+
+x-waba-id
+YOUR_WABA_ID
+
+Enter your WhatsApp Business Account ID
+
+Content-Type
+application/json
+
+PARAMS
+fields
+template_analytics?start=1689379200%26end=1689552000%26granularity=DAILY%26metric_types=[%27SENT%27%2C%27DELIVERED%27%2C%27READ%27%2C%27CLICKED%27]%26template_ids=[1924084211297547%2C954638012257287]
