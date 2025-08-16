@@ -19,7 +19,19 @@ import { initDatabase } from "./config/database";
 const app = express();
 
 app.use(helmet());
-app.use(cors());
+// CORS configuration to allow both local development and production
+app.use(cors({
+  origin: [
+    'http://localhost:3000',  // Allow local development frontend
+    'http://localhost:5173',  // Allow Vite preview port
+    'https://whatsapp-backend-315431551371.europe-west1.run.app', // Allow production
+    /^https:\/\/.*\.vercel\.app$/, // Allow Vercel deployments
+    /^https:\/\/.*\.netlify\.app$/, // Allow Netlify deployments
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id'],
+}));
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
@@ -44,6 +56,21 @@ app.get("/api/test", (_req, res) => {
 
 // Debug: Log route registration
 console.log("Registering routes...");
+
+// Direct webhook route for simpler URL
+app.get("/api/interaktWebhook", (req, res) => {
+  const challenge = req.query["hub.challenge"];
+  console.log("Webhook verification attempt:", { challenge });
+  
+  // According to Interakt documentation: simply return the hub.challenge value
+  if (challenge) {
+    console.log("Webhook verified - returning challenge:", challenge);
+    res.status(200).send(challenge);
+  } else {
+    console.log("Webhook verification failed - no challenge provided");
+    res.status(200).send("OK");
+  }
+});
 
 app.use("/api/interakt", interaktRoutes);
 app.use("/api/contacts", contactRoutes);

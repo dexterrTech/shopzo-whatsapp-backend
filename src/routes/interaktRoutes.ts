@@ -25,56 +25,48 @@ const router = Router();
 
 /**
  * @openapi
- * /webhook:
+ * /api/interaktWebhook:
  *   get:
  *     tags:
  *       - Webhook
  *     summary: Webhook Verification
- *     description: Facebook webhook verification endpoint. Returns hub.challenge parameter for verification.
+ *     description: Interakt webhook verification endpoint. Returns hub.challenge parameter for verification as per Interakt documentation.
  *     parameters:
- *       - in: query
- *         name: hub.mode
- *         schema:
- *           type: string
- *         description: Webhook mode
- *       - in: query
- *         name: hub.verify_token
- *         schema:
- *           type: string
- *         description: Webhook verification token
  *       - in: query
  *         name: hub.challenge
  *         schema:
  *           type: string
  *         description: Challenge string to verify webhook
+ *         required: true
+ *         example: "123456"
  *     responses:
  *       200:
- *         description: Webhook verified successfully
+ *         description: Webhook verified successfully - returns the hub.challenge value
  *         content:
  *           text/plain:
  *             schema:
  *               type: string
- *               example: "CHALLENGE_STRING_HERE"
+ *               example: "123456"
  */
-// GET /api/interakt/webhook - Webhook verification
-router.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
+// GET /api/interakt/interaktWebhook - Webhook verification
+router.get("/interaktWebhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
 
-  // Verify the webhook
-  if (mode === "subscribe" && token === process.env.WEBHOOK_VERIFY_TOKEN) {
-    console.log("Webhook verified");
+  console.log("Webhook verification attempt:", { challenge });
+
+  // According to Interakt documentation: simply return the hub.challenge value
+  if (challenge) {
+    console.log("Webhook verified - returning challenge:", challenge);
     res.status(200).send(challenge);
   } else {
-    console.log("Webhook verification failed");
-    res.sendStatus(403);
+    console.log("Webhook verification failed - no challenge provided");
+    res.status(200).send("OK");
   }
 });
 
 /**
  * @openapi
- * /webhook:
+ * /api/interaktWebhook:
  *   post:
  *     tags:
  *       - Webhook
@@ -90,8 +82,8 @@ router.get("/webhook", (req, res) => {
  *       200:
  *         description: Webhook received successfully
  */
-// POST /api/interakt/webhook - Receive webhook updates
-router.post("/webhook", async (req, res) => {
+// POST /api/interakt/interaktWebhook - Receive webhook updates
+router.post("/interaktWebhook", async (req, res) => {
   const body = req.body;
   console.log("Webhook received:", JSON.stringify(body, null, 2));
 

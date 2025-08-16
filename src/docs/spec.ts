@@ -11,10 +11,10 @@ const options: swaggerJSDoc.Options = {
       description: "API for WhatsApp Dashboard with Interakt integration new ",
     },
     servers: [
-      // { 
-      //   url: `http://localhost:${env.PORT || 8000}`,
-      //   description: 'Local Development'
-      // },
+      { 
+        url: `http://localhost:${env.PORT || 8000}`,
+        description: 'Local Development'
+      },
       {
         url: 'https://whatsapp-backend-315431551371.europe-west1.run.app',
         description: 'Production Server'
@@ -95,25 +95,51 @@ if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).lengt
         }
       }
     },
-    "/api/interakt/webhook": {
+    "/api/interaktWebhook": {
       get: {
         tags: ["Webhook"],
         summary: "Webhook Verification",
-        description: "Facebook webhook verification endpoint",
+        description: "Facebook webhook verification endpoint. Returns hub.challenge parameter for verification. This matches the documentation requirements for Meta webhook setup.",
         parameters: [
+          {
+            in: "query",
+            name: "hub.mode",
+            schema: { type: "string" },
+            description: "Webhook mode (usually 'subscribe')",
+            example: "subscribe"
+          },
+          {
+            in: "query",
+            name: "hub.verify_token",
+            schema: { type: "string" },
+            description: "Webhook verification token from environment variables",
+            example: "YOUR_VERIFY_TOKEN"
+          },
           {
             in: "query",
             name: "hub.challenge",
             schema: { type: "string" },
-            description: "Challenge string to verify webhook"
+            description: "Challenge string to verify webhook. Must be returned as response.",
+            example: "123456",
+            required: true
           }
         ],
         responses: {
           200: {
-            description: "Webhook verified successfully",
+            description: "Webhook verified successfully - returns the hub.challenge value",
             content: {
               "text/plain": {
-                schema: { type: "string" }
+                schema: { type: "string" },
+                example: "123456"
+              }
+            }
+          },
+          403: {
+            description: "Webhook verification failed - invalid token or mode",
+            content: {
+              "text/plain": {
+                schema: { type: "string" },
+                example: "Forbidden"
               }
             }
           }
@@ -122,10 +148,103 @@ if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).lengt
       post: {
         tags: ["Webhook"],
         summary: "Webhook Message Updates",
-        description: "Receives message status updates and incoming messages from Facebook",
+        description: "Receives message status updates and incoming messages from Facebook. Handles both WhatsApp Business Account events and Tech Partner events (PARTNER_ADDED).",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  object: {
+                    type: "string",
+                    enum: ["whatsapp_business_account", "tech_partner"],
+                    description: "Type of webhook object"
+                  },
+                  entry: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        changes: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              value: {
+                                type: "object",
+                                properties: {
+                                  event: {
+                                    type: "string",
+                                    description: "Event type (e.g., PARTNER_ADDED)"
+                                  },
+                                  waba_info: {
+                                    type: "object",
+                                    properties: {
+                                      waba_id: { type: "string" },
+                                      solution_id: { type: "string" }
+                                    }
+                                  },
+                                  messages: {
+                                    type: "array",
+                                    description: "Incoming messages"
+                                  },
+                                  statuses: {
+                                    type: "array",
+                                    description: "Message status updates"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              examples: {
+                "Tech Partner Event": {
+                  value: {
+                    object: "tech_partner",
+                    entry: [{
+                      changes: [{
+                        value: {
+                          event: "PARTNER_ADDED",
+                          waba_info: {
+                            waba_id: "123456789",
+                            solution_id: "solution_123"
+                          }
+                        }
+                      }]
+                    }]
+                  }
+                },
+                "WhatsApp Message": {
+                  value: {
+                    object: "whatsapp_business_account",
+                    entry: [{
+                      changes: [{
+                        value: {
+                          messages: [{
+                            from: "1234567890",
+                            text: { body: "Hello" }
+                          }]
+                        }
+                      }]
+                    }]
+                  }
+                }
+              }
+            }
+          }
+        },
         responses: {
           200: {
-            description: "Webhook received successfully"
+            description: "Webhook received and processed successfully"
+          },
+          500: {
+            description: "Error processing webhook"
           }
         }
       }
@@ -174,6 +293,208 @@ if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).lengt
         responses: {
           200: {
             description: "List of campaigns retrieved successfully"
+          }
+        }
+      }
+    },
+    "/api/interakt/tech-partner-onboarding": {
+      post: {
+        tags: ["Webhook"],
+        summary: "Tech Partner Onboarding API",
+        description: "Handles tech partner onboarding when PARTNER_ADDED event is received from Meta. This endpoint can be called manually if the webhook event is not received within 5-7 minutes.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["entry", "object"],
+                properties: {
+                  entry: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        changes: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              value: {
+                                type: "object",
+                                properties: {
+                                  event: {
+                                    type: "string",
+                                    enum: ["PARTNER_ADDED"],
+                                    description: "Event type must be PARTNER_ADDED"
+                                  },
+                                  waba_info: {
+                                    type: "object",
+                                    properties: {
+                                      waba_id: {
+                                        type: "string",
+                                        description: "WhatsApp Business Account ID"
+                                      },
+                                      solution_id: {
+                                        type: "string",
+                                        description: "Solution ID from Meta"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  object: {
+                    type: "string",
+                    enum: ["tech_partner"],
+                    description: "Object type must be tech_partner"
+                  }
+                }
+              },
+              example: {
+                entry: [{
+                  changes: [{
+                    value: {
+                      event: "PARTNER_ADDED",
+                      waba_info: {
+                        waba_id: "123456789",
+                        solution_id: "solution_123"
+                      }
+                    }
+                  }]
+                }],
+                object: "tech_partner"
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: "Onboarding completed successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    event: {
+                      type: "string",
+                      enum: ["WABA_ONBOARDED"],
+                      description: "Event type after successful onboarding"
+                    },
+                    isv_name_token: {
+                      type: "string",
+                      description: "ISV name token from Interakt"
+                    },
+                    waba_id: {
+                      type: "string",
+                      description: "WhatsApp Business Account ID"
+                    },
+                    phone_number_id: {
+                      type: "string",
+                      description: "Phone number ID assigned"
+                    },
+                    fallback: {
+                      type: "boolean",
+                      description: "Indicates if fallback data was used"
+                    }
+                  }
+                },
+                example: {
+                  event: "WABA_ONBOARDED",
+                  isv_name_token: "token_123",
+                  waba_id: "123456789",
+                  phone_number_id: "phone_456",
+                  fallback: false
+                }
+              }
+            }
+          },
+          400: {
+            description: "Invalid webhook payload"
+          }
+        }
+      }
+    },
+    "/api/interakt/webhook-url": {
+      post: {
+        tags: ["Webhook"],
+        summary: "Add/Update Webhook URL",
+        description: "Configures the webhook URL for a specific WABA (WhatsApp Business Account) to receive real-time updates from Meta.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["waba_id", "webhook_url", "verify_token"],
+                properties: {
+                  waba_id: {
+                    type: "string",
+                    description: "WhatsApp Business Account ID"
+                  },
+                  webhook_url: {
+                    type: "string",
+                    format: "uri",
+                    description: "Webhook URL to receive updates"
+                  },
+                  verify_token: {
+                    type: "string",
+                    description: "Verification token for webhook security"
+                  }
+                }
+              },
+              example: {
+                waba_id: "123456789",
+                webhook_url: "https://yourdomain.com/webhook",
+                verify_token: "VERIFY_TOKEN_123"
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: "Webhook URL configured successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: {
+                      type: "boolean",
+                      description: "Operation success status"
+                    },
+                    message: {
+                      type: "string",
+                      description: "Success message"
+                    },
+                    waba_id: {
+                      type: "string",
+                      description: "WABA ID that was configured"
+                    },
+                    webhook_url: {
+                      type: "string",
+                      description: "Webhook URL that was set"
+                    },
+                    fallback: {
+                      type: "boolean",
+                      description: "Indicates if fallback data was used"
+                    }
+                  }
+                },
+                example: {
+                  success: true,
+                  message: "Webhook URL configured successfully",
+                  waba_id: "123456789",
+                  webhook_url: "https://yourdomain.com/webhook",
+                  fallback: false
+                }
+              }
+            }
           }
         }
       }
