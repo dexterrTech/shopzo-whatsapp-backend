@@ -1,14 +1,17 @@
 import { Pool } from 'pg';
+import { env } from './env';
 import { runMigrations } from './migrations';
 import { seedDatabase } from './seed';
 
-const connectionString = 'postgresql+psycopg2://postgres:newpassword@localhost:5432/whatsapp_dashboard';
+// Build connection string from environment variables
+const buildConnectionString = () => {
+  return env.DB_CONNECTION_STRING;
+};
 
-// Remove the +psycopg2 part as it's not needed for Node.js
-const cleanConnectionString = connectionString.replace('postgresql+psycopg2://', 'postgresql://');
+const connectionString = buildConnectionString();
 
 export const pool = new Pool({
-  connectionString: cleanConnectionString,
+  connectionString: connectionString,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
@@ -17,6 +20,9 @@ export const pool = new Pool({
 // Test the connection
 pool.on('connect', () => {
   console.log('Connected to PostgreSQL database');
+  // Extract database info from connection string for logging
+  const dbUrl = new URL(connectionString);
+  console.log(`Database: ${dbUrl.pathname.slice(1)} on ${dbUrl.hostname}:${dbUrl.port || 5432}`);
 });
 
 pool.on('error', (err) => {

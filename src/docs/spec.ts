@@ -1,14 +1,16 @@
 import swaggerJSDoc from "swagger-jsdoc";
+import { env } from "../config/env";
+import path from "path";
 
 const options: swaggerJSDoc.Options = {
   definition: {
-    openapi: "3.0.3",
+    openapi: "3.0.0",
     info: {
-      title: "WhatsApp Dashboard Backend",
+      title: "WhatsApp Dashboard API",
       version: "1.0.0",
-      description: "Interakt proxy backend with fallback mocks",
+      description: "API for WhatsApp Dashboard with Interakt integration",
     },
-    servers: [{ url: "http://localhost:8000" }],
+    servers: [{ url: `http://localhost:${env.PORT || 8000}` }],
     components: {
       securitySchemes: {
         InteraktHeaders: {
@@ -21,10 +23,14 @@ const options: swaggerJSDoc.Options = {
     },
   },
   apis: [
-    // we'll annotate routes with JSDoc below
-    "src/routes/*.ts",
+    // Use absolute paths to ensure proper file scanning
+    path.join(__dirname, "../routes/*.ts"),
+    path.join(__dirname, "../routes/**/*.ts")
   ],
 };
+
+// Add debugging to see what files are being scanned
+console.log("Swagger scanning paths:", options.apis);
 
 export const swaggerSpec = swaggerJSDoc(options);
 
