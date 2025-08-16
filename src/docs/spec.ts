@@ -11,10 +11,10 @@ const options: swaggerJSDoc.Options = {
       description: "API for WhatsApp Dashboard with Interakt integration new ",
     },
     servers: [
-      { 
-        url: `http://localhost:${env.PORT || 8000}`,
-        description: 'Local Development'
-      },
+      // { 
+      //   url: `http://localhost:${env.PORT || 8000}`,
+      //   description: 'Local Development'
+      // },
       {
         url: 'https://whatsapp-backend-315431551371.europe-west1.run.app',
         description: 'Production Server'
