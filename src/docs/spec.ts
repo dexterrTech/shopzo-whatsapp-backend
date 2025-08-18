@@ -22,6 +22,12 @@ const options: swaggerJSDoc.Options = {
     ],
     components: {
       securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+          description: "JWT token for authentication"
+        },
         InteraktHeaders: {
           type: "apiKey",
           in: "header",
@@ -29,6 +35,132 @@ const options: swaggerJSDoc.Options = {
           description: "Interakt Access Token",
         },
       },
+      schemas: {
+        Contact: {
+          type: "object",
+          properties: {
+            id: {
+              type: "integer",
+              description: "Unique identifier for the contact"
+            },
+            name: {
+              type: "string",
+              description: "Contact's full name"
+            },
+            email: {
+              type: "string",
+              format: "email",
+              description: "Contact's email address"
+            },
+            whatsapp_number: {
+              type: "string",
+              description: "WhatsApp number (required, unique)"
+            },
+            phone: {
+              type: "string",
+              description: "Alternative phone number"
+            },
+            telegram_id: {
+              type: "string",
+              description: "Telegram username or ID"
+            },
+            viber_id: {
+              type: "string",
+              description: "Viber ID"
+            },
+            line_id: {
+              type: "string",
+              description: "Line ID"
+            },
+            instagram_id: {
+              type: "string",
+              description: "Instagram username or ID"
+            },
+            facebook_id: {
+              type: "string",
+              description: "Facebook ID or username"
+            },
+            created_at: {
+              type: "string",
+              format: "date-time",
+              description: "When the contact was created"
+            },
+            last_seen_at: {
+              type: "string",
+              format: "date-time",
+              description: "When the contact was last seen"
+            }
+          },
+          required: ["id", "whatsapp_number", "created_at", "last_seen_at"]
+        },
+        CreateContactRequest: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string"
+            },
+            email: {
+              type: "string",
+              format: "email"
+            },
+            whatsapp_number: {
+              type: "string"
+            },
+            phone: {
+              type: "string"
+            },
+            telegram_id: {
+              type: "string"
+            },
+            viber_id: {
+              type: "string"
+            },
+            line_id: {
+              type: "string"
+            },
+            instagram_id: {
+              type: "string"
+            },
+            facebook_id: {
+              type: "string"
+            }
+          },
+          required: ["whatsapp_number"]
+        },
+        UpdateContactRequest: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string"
+            },
+            email: {
+              type: "string",
+              format: "email"
+            },
+            whatsapp_number: {
+              type: "string"
+            },
+            phone: {
+              type: "string"
+            },
+            telegram_id: {
+              type: "string"
+            },
+            viber_id: {
+              type: "string"
+            },
+            line_id: {
+              type: "string"
+            },
+            instagram_id: {
+              type: "string"
+            },
+            facebook_id: {
+              type: "string"
+            }
+          }
+        }
+      }
     },
   },
   apis: [
@@ -277,10 +409,184 @@ if (!(swaggerSpec as any).paths || Object.keys((swaggerSpec as any).paths).lengt
       get: {
         tags: ["Contacts"],
         summary: "Get all contacts",
-        description: "Retrieve a list of all contacts",
+        description: "Retrieve a list of all contacts with optional pagination",
+        parameters: [
+          {
+            in: "query",
+            name: "limit",
+            schema: {
+              type: "integer",
+              minimum: 1,
+              maximum: 200,
+              default: 50
+            },
+            description: "Maximum number of contacts to return"
+          },
+          {
+            in: "query",
+            name: "search",
+            schema: {
+              type: "string"
+            },
+            description: "Search term to filter contacts by name, email, or phone"
+          }
+        ],
         responses: {
           200: {
-            description: "List of contacts retrieved successfully"
+            description: "List of contacts retrieved successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        $ref: "#/components/schemas/Contact"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      post: {
+        tags: ["Contacts"],
+        summary: "Create a new contact",
+        description: "Create a new contact with the provided information",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                $ref: "#/components/schemas/CreateContactRequest"
+              }
+            }
+          }
+        },
+        responses: {
+          201: {
+            description: "Contact created successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Contact"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/contacts/{id}": {
+      get: {
+        tags: ["Contacts"],
+        summary: "Get contact by ID",
+        description: "Retrieve a specific contact by their ID",
+        parameters: [
+          {
+            in: "path",
+            name: "id",
+            required: true,
+            schema: {
+              type: "integer"
+            },
+            description: "Contact ID"
+          }
+        ],
+        responses: {
+          200: {
+            description: "Contact retrieved successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          404: {
+            description: "Contact not found"
+          }
+        }
+      },
+      put: {
+        tags: ["Contacts"],
+        summary: "Update a contact",
+        description: "Update an existing contact's information",
+        parameters: [
+          {
+            in: "path",
+            name: "id",
+            required: true,
+            schema: {
+              type: "integer"
+            },
+            description: "Contact ID"
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                $ref: "#/components/schemas/UpdateContactRequest"
+              }
+            }
+          }
+        },
+        responses: {
+          200: {
+            description: "Contact updated successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          404: {
+            description: "Contact not found"
+          }
+        }
+      },
+      delete: {
+        tags: ["Contacts"],
+        summary: "Delete a contact",
+        description: "Delete a contact by their ID",
+        parameters: [
+          {
+            in: "path",
+            name: "id",
+            required: true,
+            schema: {
+              type: "integer"
+            },
+            description: "Contact ID"
+          }
+        ],
+        responses: {
+          200: {
+            description: "Contact deleted successfully",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: {
+                      type: "string",
+                      example: "Contact deleted successfully"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          404: {
+            description: "Contact not found"
           }
         }
       }

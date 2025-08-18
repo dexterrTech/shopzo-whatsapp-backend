@@ -1,13 +1,34 @@
 import { pool } from './database';
+import bcrypt from 'bcryptjs';
 
 export async function seedDatabase() {
   try {
     console.log('Seeding database with sample data...');
     
-    // Check if we already have data
+    // Create default super admin user if not exists
+    const existingAdmin = await pool.query(
+      'SELECT id FROM users_whatsapp WHERE email = $1',
+      ['admin@whatsapp.com']
+    );
+
+    if (existingAdmin.rows.length === 0) {
+      const passwordHash = await bcrypt.hash('admin123', 12);
+      
+      await pool.query(
+        `INSERT INTO users_whatsapp (name, email, password_hash, role, is_approved, is_active) 
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        ['Super Admin', 'admin@whatsapp.com', passwordHash, 'super_admin', true, true]
+      );
+      
+      console.log('Default super admin created: admin@whatsapp.com / admin123');
+    } else {
+      console.log('Super admin already exists, skipping creation');
+    }
+    
+    // Check if we already have contacts data
     const existingContacts = await pool.query('SELECT COUNT(*) FROM contacts');
     if (parseInt(existingContacts.rows[0].count) > 0) {
-      console.log('Database already has data, skipping seed');
+      console.log('Database already has contacts data, skipping contacts seed');
       return;
     }
     

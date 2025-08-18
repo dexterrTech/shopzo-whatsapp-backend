@@ -30,6 +30,32 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_contacts_created_at ON contacts(created_at);
     `);
     
+    // Create users_whatsapp table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users_whatsapp (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(20) DEFAULT 'user' CHECK (role IN ('user', 'aggregator', 'super_admin')),
+        is_approved BOOLEAN DEFAULT FALSE,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login_at TIMESTAMP,
+        approved_by INTEGER REFERENCES users_whatsapp(id),
+        approved_at TIMESTAMP
+      );
+    `);
+    
+    // Create indexes for users table
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users_whatsapp(email);
+      CREATE INDEX IF NOT EXISTS idx_users_role ON users_whatsapp(role);
+      CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users_whatsapp(is_approved);
+      CREATE INDEX IF NOT EXISTS idx_users_created_at ON users_whatsapp(created_at);
+    `);
+    
     console.log('Migrations completed successfully');
   } catch (error) {
     console.error('Migration failed:', error);

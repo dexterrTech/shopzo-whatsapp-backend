@@ -1,4 +1,4 @@
-// import { pool } from '../config/database'; // Temporarily commented out
+import { pool } from '../config/database';
 
 export interface Contact {
   id: number;
@@ -31,97 +31,121 @@ export interface UpdateContactData extends Partial<CreateContactData> {
   id: number;
 }
 
-// Mock data for testing without database
-const mockContacts: Contact[] = [
-  {
-    id: 1,
-    name: "John Doe",
-    email: "john@example.com",
-    whatsapp_number: "+1234567890",
-    phone: "+1234567890",
-    created_at: new Date("2024-01-01"),
-    last_seen_at: new Date("2024-01-15")
-  },
-  {
-    id: 2,
-    name: "Jane Smith",
-    email: "jane@example.com",
-    whatsapp_number: "+1987654321",
-    phone: "+1987654321",
-    created_at: new Date("2024-01-02"),
-    last_seen_at: new Date("2024-01-16")
-  },
-  {
-    id: 3,
-    name: "Bob Johnson",
-    email: "bob@example.com",
-    whatsapp_number: "+1122334455",
-    phone: "+1122334455",
-    created_at: new Date("2024-01-03"),
-    last_seen_at: new Date("2024-01-17")
-  }
-];
-
 export class ContactService {
   static async getAllContacts(limit?: number): Promise<Contact[]> {
-    // Mock implementation - return sample data
-    console.log("Mock ContactService: getAllContacts called with limit:", limit);
-    return limit ? mockContacts.slice(0, limit) : mockContacts;
+    try {
+      console.log("ContactService: getAllContacts called with limit:", limit);
+      const query = `
+        SELECT * FROM contacts 
+        ORDER BY created_at DESC 
+        ${limit ? 'LIMIT $1' : ''}
+      `;
+      const params = limit ? [limit] : [];
+      const result = await pool.query(query, params);
+      return result.rows;
+    } catch (error) {
+      console.error('Error getting all contacts:', error);
+      throw error;
+    }
   }
 
   static async getContactById(id: number): Promise<Contact | null> {
-    // Mock implementation
-    console.log("Mock ContactService: getContactById called with id:", id);
-    return mockContacts.find(contact => contact.id === id) || null;
+    try {
+      console.log("ContactService: getContactById called with id:", id);
+      const query = 'SELECT * FROM contacts WHERE id = $1';
+      const result = await pool.query(query, [id]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error('Error getting contact by id:', error);
+      throw error;
+    }
   }
 
   static async getContactByWhatsAppNumber(whatsappNumber: string): Promise<Contact | null> {
-    // Mock implementation
-    console.log("Mock ContactService: getContactByWhatsAppNumber called with:", whatsappNumber);
-    return mockContacts.find(contact => contact.whatsapp_number === whatsappNumber) || null;
+    try {
+      console.log("ContactService: getContactByWhatsAppNumber called with:", whatsappNumber);
+      const query = 'SELECT * FROM contacts WHERE whatsapp_number = $1';
+      const result = await pool.query(query, [whatsappNumber]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error('Error getting contact by WhatsApp number:', error);
+      throw error;
+    }
   }
 
   static async createContact(data: CreateContactData): Promise<Contact> {
-    // Mock implementation
-    console.log("Mock ContactService: createContact called with:", data);
-    const newContact: Contact = {
-      id: mockContacts.length + 1,
-      ...data,
-      created_at: new Date(),
-      last_seen_at: new Date()
-    };
-    mockContacts.push(newContact);
-    return newContact;
+    try {
+      console.log("ContactService: createContact called with:", data);
+      const query = `
+        INSERT INTO contacts (
+          name, email, whatsapp_number, phone, telegram_id, viber_id, 
+          line_id, instagram_id, facebook_id, created_at, last_seen_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+        RETURNING *
+      `;
+      const params = [
+        data.name, data.email, data.whatsapp_number, data.phone,
+        data.telegram_id, data.viber_id, data.line_id, data.instagram_id, data.facebook_id
+      ];
+      const result = await pool.query(query, params);
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error creating contact:', error);
+      throw error;
+    }
   }
 
   static async updateContact(data: UpdateContactData): Promise<Contact | null> {
-    // Mock implementation
-    console.log("Mock ContactService: updateContact called with:", data);
-    const index = mockContacts.findIndex(contact => contact.id === data.id);
-    if (index === -1) return null;
-    
-    mockContacts[index] = { ...mockContacts[index], ...data };
-    return mockContacts[index];
+    try {
+      console.log("ContactService: updateContact called with:", data);
+      const { id, ...updateData } = data;
+      
+      const fields = Object.keys(updateData).map((key, index) => `${key} = $${index + 2}`);
+      const values = Object.values(updateData);
+      
+      const query = `
+        UPDATE contacts 
+        SET ${fields.join(', ')}, last_seen_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `;
+      const params = [id, ...values];
+      const result = await pool.query(query, params);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error('Error updating contact:', error);
+      throw error;
+    }
   }
 
   static async deleteContact(id: number): Promise<boolean> {
-    // Mock implementation
-    console.log("Mock ContactService: deleteContact called with id:", id);
-    const index = mockContacts.findIndex(contact => contact.id === id);
-    if (index === -1) return false;
-    
-    mockContacts.splice(index, 1);
-    return true;
+    try {
+      console.log("ContactService: deleteContact called with id:", id);
+      const query = 'DELETE FROM contacts WHERE id = $1';
+      const result = await pool.query(query, [id]);
+      return (result.rowCount || 0) > 0;
+    } catch (error) {
+      console.error('Error deleting contact:', error);
+      throw error;
+    }
   }
 
   static async searchContacts(searchTerm: string, limit?: number): Promise<Contact[]> {
-    // Mock implementation
-    console.log("Mock ContactService: searchContacts called with:", searchTerm, limit);
-    const filtered = mockContacts.filter(contact => 
-      contact.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      contact.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      contact.whatsapp_number.includes(searchTerm)
-    );
-    return limit ? filtered.slice(0, limit) : filtered;
+    try {
+      console.log("ContactService: searchContacts called with:", searchTerm, limit);
+      const query = `
+        SELECT * FROM contacts 
+        WHERE name ILIKE $1 OR email ILIKE $1 OR whatsapp_number ILIKE $1
+        ORDER BY created_at DESC
+        ${limit ? 'LIMIT $2' : ''}
+      `;
+      const searchPattern = `%${searchTerm}%`;
+      const params = limit ? [searchPattern, limit] : [searchPattern];
+      const result = await pool.query(query, params);
+      return result.rows;
+    } catch (error) {
+      console.error('Error searching contacts:', error);
+      throw error;
+    }
   }
 }
