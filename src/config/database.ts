@@ -30,7 +30,7 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);
-  process.exit(-1);
+  // Do not exit; keep service running so fallback data and non-DB routes keep working
 });
 
 export async function initDatabase() {
