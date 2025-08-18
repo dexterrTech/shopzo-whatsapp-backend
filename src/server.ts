@@ -127,21 +127,19 @@ app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use(errorHandler);
 
-// Initialize database and start server
+// Initialize server first for platform health checks, then initialize database in background
 async function startServer() {
+  app.listen(numericPort, '0.0.0.0', () => {
+    // eslint-disable-next-line no-console
+    console.log(`Server listening on http://localhost:${numericPort}`);
+    console.log(`Swagger docs available at http://localhost:${numericPort}/docs`);
+  });
+
   try {
-    // Initialize database
     await initDatabase();
     console.log("Database initialized successfully");
-    
-    app.listen(numericPort, () => {
-      // eslint-disable-next-line no-console
-      console.log(`Server listening on http://localhost:${numericPort}`);
-      console.log(`Swagger docs available at http://localhost:${numericPort}/docs`);
-    });
   } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
+    console.error('Database initialization failed (continuing with fallback):', error);
   }
 }
 
