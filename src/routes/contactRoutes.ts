@@ -177,6 +177,8 @@ router.get("/", async (req, res, next) => {
  * @openapi
  * /api/contacts/{id}:
  *   get:
+ *     tags:
+ *       - Contacts
  *     summary: Get contact by ID
  *     description: Retrieve a specific contact by their ID
  *     parameters:
@@ -221,6 +223,8 @@ router.get("/:id", async (req, res, next) => {
  * @openapi
  * /api/contacts:
  *   post:
+ *     tags:
+ *       - Contacts
  *     summary: Create a new contact
  *     description: Create a new contact with the provided information
  *     requestBody:
@@ -278,6 +282,8 @@ router.post("/", async (req, res, next) => {
  * @openapi
  * /api/contacts/{id}:
  *   put:
+ *     tags:
+ *       - Contacts
  *     summary: Update a contact
  *     description: Update an existing contact's information
  *     parameters:
@@ -357,6 +363,8 @@ router.put("/:id", async (req, res, next) => {
  * @openapi
  * /api/contacts/{id}:
  *   delete:
+ *     tags:
+ *       - Contacts
  *     summary: Delete a contact
  *     description: Delete a contact by their ID
  *     parameters:

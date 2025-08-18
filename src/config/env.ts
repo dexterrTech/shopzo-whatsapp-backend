@@ -42,6 +42,10 @@ const EnvSchema = z.object({
   // API Versions
   FACEBOOK_API_VERSION: z.string(),
   INTERAKT_API_VERSION: z.string(),
+  
+  // JWT Configuration
+  JWT_SECRET: z.string(),
+  JWT_EXPIRES_IN: z.string().default("7d"),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

@@ -10,6 +10,7 @@ import accMatricsRoutes from "./routes/accMatrics";
 import phoneNumbersRoutes from "./routes/phoneNumbers";
 import conversationalComponentsRoutes from "./routes/conversationalComponents";
 import sendMessageRoutes from "./routes/sendMessage";
+import authRoutes from "./routes/authRoutes";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
 import swaggerUi from "swagger-ui-express";
@@ -57,10 +58,18 @@ app.get("/api/test", (_req, res) => {
 // Debug: Log route registration
 console.log("Registering routes...");
 
-// Direct webhook route for simpler URL
+// Direct webhook route for simpler URL - protected with webhook verification
 app.get("/api/interaktWebhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
-  console.log("Webhook verification attempt:", { challenge });
+  const verifyToken = req.query["hub.verify_token"];
+  
+  console.log("Webhook verification attempt:", { challenge, verifyToken });
+  
+  // Verify webhook token for security
+  if (verifyToken !== env.WEBHOOK_VERIFY_TOKEN) {
+    console.log("Webhook verification failed - invalid verify token");
+    return res.status(403).send("Forbidden");
+  }
   
   // According to Interakt documentation: simply return the hub.challenge value
   if (challenge) {
@@ -72,6 +81,7 @@ app.get("/api/interaktWebhook", (req, res) => {
   }
 });
 
+app.use("/api/auth", authRoutes);
 app.use("/api/interakt", interaktRoutes);
 app.use("/api/contacts", contactRoutes);
 app.use("/api/campaigns", campaignRoutes);
@@ -120,9 +130,9 @@ app.use(errorHandler);
 // Initialize database and start server
 async function startServer() {
   try {
-    // Temporarily disable database initialization for testing
-    // await initDatabase();
-    console.log("Database initialization skipped for testing");
+    // Initialize database
+    await initDatabase();
+    console.log("Database initialized successfully");
     
     app.listen(numericPort, () => {
       // eslint-disable-next-line no-console
