@@ -11,11 +11,14 @@ import phoneNumbersRoutes from "./routes/phoneNumbers";
 import conversationalComponentsRoutes from "./routes/conversationalComponents";
 import sendMessageRoutes from "./routes/sendMessage";
 import authRoutes from "./routes/authRoutes";
+import billingRoutes from "./routes/billingRoutes";
+import walletRoutes from "./routes/walletRoutes";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/spec";
 import { initDatabase } from "./config/database";
+import { authenticateToken } from "./middleware/authMiddleware";
 
 const app = express();
 
@@ -58,30 +61,34 @@ app.get("/api/test", (_req, res) => {
 // Debug: Log route registration
 console.log("Registering routes...");
 
-// Direct webhook route for simpler URL - protected with webhook verification
+// Direct webhook route for simpler URL - do not require auth or verify token (per requirement)
 app.get("/api/interaktWebhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
-  const verifyToken = req.query["hub.verify_token"];
-  
-  console.log("Webhook verification attempt:", { challenge, verifyToken });
-  
-  // Verify webhook token for security
-  if (verifyToken !== env.WEBHOOK_VERIFY_TOKEN) {
-    console.log("Webhook verification failed - invalid verify token");
-    return res.status(403).send("Forbidden");
-  }
-  
-  // According to Interakt documentation: simply return the hub.challenge value
+  console.log("Webhook verification attempt:", { challenge });
   if (challenge) {
-    console.log("Webhook verified - returning challenge:", challenge);
-    res.status(200).send(challenge);
-  } else {
-    console.log("Webhook verification failed - no challenge provided");
-    res.status(200).send("OK");
+    return res.status(200).send(challenge as any);
   }
+  return res.status(200).send("OK");
+});
+
+// Global auth gate: require JWT for all routes except allowlist
+app.use((req, res, next) => {
+  const allowlist: RegExp[] = [
+    /^\/health$/,
+    /^\/api\/test$/,
+    /^\/docs(\.json)?$/,
+    /^\/docs\/?/,
+    /^\/api\/auth\/register$/,
+    /^\/api\/auth\/login$/,
+    /^\/api\/interaktWebhook$/,
+  ];
+  if (req.method === 'OPTIONS') return next();
+  if (allowlist.some((rx) => rx.test(req.path))) return next();
+  return authenticateToken(req as any, res as any, next as any);
 });
 
 app.use("/api/auth", authRoutes);
+// Remove misplaced placeholder for billing
 app.use("/api/interakt", interaktRoutes);
 app.use("/api/contacts", contactRoutes);
 app.use("/api/campaigns", campaignRoutes);
@@ -89,6 +96,10 @@ app.use("/api/acc-matrics", accMatricsRoutes);
 app.use("/api/phone-numbers", phoneNumbersRoutes);
 app.use("/api/conversational-components", conversationalComponentsRoutes);
 app.use("/api/send-message", sendMessageRoutes);
+
+// Billing routes (after auth so we can protect with middleware)
+app.use("/api/billing", billingRoutes);
+app.use("/api/wallet", walletRoutes);
 
 console.log("Routes registered successfully");
 

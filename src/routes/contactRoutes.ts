@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { ContactService, CreateContactData, UpdateContactData } from "../services/contactService";
+import { pool } from "../config/database";
 
 const router = Router();
 
@@ -404,6 +405,167 @@ router.delete("/:id", async (req, res, next) => {
     }
 
     res.json({ message: "Contact deleted successfully" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/contacts/import:
+ *   post:
+ *     tags:
+ *       - Contacts
+ *     summary: Import multiple contacts (JSON array)
+ *     description: Accepts an array of contacts to insert/update in bulk. Use upsert=true to update existing contacts that match by whatsapp_number.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [contacts]
+ *             properties:
+ *               upsert:
+ *                 type: boolean
+ *                 default: true
+ *               dedupe:
+ *                 type: boolean
+ *                 default: true
+ *               contacts:
+ *                 type: array
+ *                 items:
+ *                   $ref: '#/components/schemas/CreateContactRequest'
+ *     responses:
+ *       200:
+ *         description: Import summary
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                     inserted:
+ *                       type: integer
+ *                     updated:
+ *                       type: integer
+ *                     skipped_duplicate_rows:
+ *                       type: integer
+ */
+router.post("/import", async (req, res, next) => {
+  try {
+    const bodySchema = z.object({
+      upsert: z.boolean().optional().default(true),
+      dedupe: z.boolean().optional().default(true),
+      contacts: z.array(
+        z.object({
+          name: z.string().optional(),
+          email: z.string().email().optional(),
+          whatsapp_number: z.string().min(1),
+          phone: z.string().optional(),
+          telegram_id: z.string().optional(),
+          viber_id: z.string().optional(),
+          line_id: z.string().optional(),
+          instagram_id: z.string().optional(),
+          facebook_id: z.string().optional(),
+        })
+      ).min(1)
+    });
+
+    const { upsert, dedupe, contacts } = bodySchema.parse(req.body);
+
+    // Dedupe within payload by whatsapp_number
+    const seen = new Set<string>();
+    const filtered = dedupe
+      ? contacts.filter((c) => {
+          const key = c.whatsapp_number.trim();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+      : contacts;
+
+    // Preload which numbers already exist for summary purposes
+    const numbers = filtered.map((c) => c.whatsapp_number.trim());
+    const existingRes = await pool.query(
+      `SELECT whatsapp_number FROM contacts WHERE whatsapp_number = ANY($1::text[])`,
+      [numbers]
+    );
+    const existingSet = new Set<string>(existingRes.rows.map((r) => r.whatsapp_number));
+
+    let inserted = 0;
+    let updated = 0;
+
+    await pool.query('BEGIN');
+    try {
+      for (const c of filtered) {
+        const params = [
+          c.name ?? null,
+          c.email ?? null,
+          c.whatsapp_number.trim(),
+          c.phone ?? null,
+          c.telegram_id ?? null,
+          c.viber_id ?? null,
+          c.line_id ?? null,
+          c.instagram_id ?? null,
+          c.facebook_id ?? null,
+        ];
+
+        if (upsert) {
+          await pool.query(
+            `INSERT INTO contacts (name, email, whatsapp_number, phone, telegram_id, viber_id, line_id, instagram_id, facebook_id, created_at, last_seen_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW(), NOW())
+             ON CONFLICT (whatsapp_number) DO UPDATE SET
+               name = COALESCE(EXCLUDED.name, contacts.name),
+               email = COALESCE(EXCLUDED.email, contacts.email),
+               phone = COALESCE(EXCLUDED.phone, contacts.phone),
+               telegram_id = COALESCE(EXCLUDED.telegram_id, contacts.telegram_id),
+               viber_id = COALESCE(EXCLUDED.viber_id, contacts.viber_id),
+               line_id = COALESCE(EXCLUDED.line_id, contacts.line_id),
+               instagram_id = COALESCE(EXCLUDED.instagram_id, contacts.instagram_id),
+               facebook_id = COALESCE(EXCLUDED.facebook_id, contacts.facebook_id)`,
+            params
+          );
+          if (existingSet.has(c.whatsapp_number.trim())) {
+            updated++;
+          } else {
+            inserted++;
+          }
+        } else {
+          // Insert only; ignore duplicates
+          const result = await pool.query(
+            `INSERT INTO contacts (name, email, whatsapp_number, phone, telegram_id, viber_id, line_id, instagram_id, facebook_id, created_at, last_seen_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW(), NOW())
+             ON CONFLICT (whatsapp_number) DO NOTHING`,
+            params
+          );
+          if (result.rowCount && result.rowCount > 0) {
+            inserted++;
+          }
+        }
+      }
+      await pool.query('COMMIT');
+    } catch (e) {
+      await pool.query('ROLLBACK');
+      throw e;
+    }
+
+    const summary = {
+      total: contacts.length,
+      inserted,
+      updated,
+      skipped_duplicate_rows: contacts.length - filtered.length,
+    };
+
+    res.json({ success: true, message: 'Import completed', summary });
   } catch (err) {
     next(err);
   }

@@ -3,6 +3,9 @@ import { z } from "zod";
 import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
+import { upsertBillingLog, BillingCategory, chargeWalletForBilling, resolveUserPricePlan, basePriceForCategory } from "../services/billingService";
+import { authenticateToken } from "../middleware/authMiddleware";
+import { pool } from "../config/database";
 
 const router = Router();
 
@@ -99,6 +102,45 @@ router.post("/interaktWebhook", async (req, res) => {
           if (change.value?.statuses) {
             // Handle message status updates
             console.log("Message status update:", change.value.statuses);
+            // Optional: basic example to upsert billing log when status indicates conversation charged
+            (async () => {
+              try {
+                const statuses = change.value.statuses as any[];
+                for (const st of statuses) {
+                  const conversationId = st?.conversation?.id || st?.id || st?.message_id;
+                  const recipient = st?.recipient_id || st?.recipient || '';
+                  const categoryRaw: string | undefined = st?.conversation?.category;
+                  const category: BillingCategory | undefined = categoryRaw ? categoryRaw.toLowerCase() as BillingCategory : undefined;
+                  const timestamp = st?.timestamp ? new Date(parseInt(st.timestamp) * 1000) : new Date();
+                  // Resolve userId via phone_number_id or waba_id mapping
+                  const phoneId = st?.pricing?.billable ? (st?.id || st?.recipient_id) : undefined;
+                  const wabaId = (change as any)?.value?.metadata?.phone_number_id ? undefined : undefined;
+                  let userId: number | undefined;
+                  if (st?.phone_number_id) {
+                    const r = await pool.query('SELECT user_id FROM waba_sources WHERE phone_number_id = $1 LIMIT 1', [st.phone_number_id]);
+                    userId = r.rows[0]?.user_id;
+                  } else if ((change as any)?.value?.metadata?.phone_number_id) {
+                    const r = await pool.query('SELECT user_id FROM waba_sources WHERE phone_number_id = $1 LIMIT 1', [(change as any).value.metadata.phone_number_id]);
+                    userId = r.rows[0]?.user_id;
+                  }
+                  if (conversationId && category) {
+                    if (userId) {
+                      await upsertBillingLog({
+                        userId,
+                        conversationId,
+                        category,
+                        recipientNumber: recipient,
+                        startTime: timestamp,
+                        endTime: timestamp,
+                        billingStatus: 'pending',
+                      });
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('Billing upsert from webhook skipped:', e);
+              }
+            })();
           }
         });
       });
@@ -714,7 +756,7 @@ router.get("/templates/:id", async (req, res, next) => {
  *                         type: string
  */
 // POST /api/interakt/messages
-router.post("/messages", async (req, res, next) => {
+router.post("/messages", authenticateToken, async (req, res, next) => {
   try {
     const payload = z
       .object({
@@ -725,6 +767,29 @@ router.post("/messages", async (req, res, next) => {
         template: z.any(),
       })
       .parse(req.body);
+
+    // Pre-send balance check using plan price for inferred category
+    try {
+      const userId = (req as any).user?.userId as number | undefined;
+      if (userId) {
+        const templateName = (payload as any)?.template?.name || '';
+        let category: BillingCategory = 'utility';
+        const n = String(templateName).toLowerCase();
+        if (n.includes('auth')) category = 'authentication';
+        else if (n.includes('market') || n.includes('promo')) category = 'marketing';
+        const plan = await resolveUserPricePlan(userId);
+        const amount = basePriceForCategory(plan, category);
+        if (amount > 0) {
+          const balRes = await pool.query('SELECT balance_paise FROM wallet_accounts WHERE user_id = $1', [userId]);
+          const balance = balRes.rows[0]?.balance_paise ?? 0;
+          if (balance < amount) {
+            return res.status(402).json({ success: false, message: 'Insufficient wallet balance' });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Pre-send balance check failed (continuing):', e);
+    }
 
     const data = await withFallback({
       feature: "sendMediaTemplate",
@@ -737,6 +802,40 @@ router.post("/messages", async (req, res, next) => {
       }),
     });
 
+    // Attempt to log billing using token user (only if template payload indicates a category)
+    try {
+      const userId = (req as any).user?.userId as number | undefined;
+      const conversationId = data?.messages?.[0]?.id;
+      const templateName = (payload as any)?.template?.name || '';
+      // Basic heuristic: derive category from template name prefix, else default to 'utility'
+      let category: BillingCategory = 'utility';
+      const n = String(templateName).toLowerCase();
+      if (n.includes('auth')) category = 'authentication';
+      else if (n.includes('market') || n.includes('promo')) category = 'marketing';
+      // else 'utility' as default
+      if (userId && conversationId) {
+        const ins = await upsertBillingLog({
+          userId,
+          conversationId,
+          category,
+          recipientNumber: payload.to,
+          startTime: new Date(),
+          endTime: new Date(),
+          billingStatus: 'pending',
+        });
+        if (ins) {
+          // Attempt immediate wallet charge; if insufficient balance, leave pending
+          const amountRes = await pool.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+          const row = amountRes.rows[0];
+          if (row) {
+            await chargeWalletForBilling({ userId, conversationId, amountPaise: row.amount_paise, currency: row.amount_currency });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('send messages billing log skipped:', e);
+    }
+
     res.status(202).json(data);
   } catch (err) {
     next(err);
@@ -744,7 +843,7 @@ router.post("/messages", async (req, res, next) => {
 });
 
 // POST /api/interakt/messages/media
-router.post("/messages/media", async (req, res, next) => {
+router.post("/messages/media", authenticateToken, async (req, res, next) => {
   try {
     const payload = z
       .object({
@@ -777,6 +876,29 @@ router.post("/messages/media", async (req, res, next) => {
       })
       .parse(req.body);
 
+    // Pre-send balance check
+    try {
+      const userId = (req as any).user?.userId as number | undefined;
+      if (userId) {
+        const templateName = (payload as any)?.template?.name || '';
+        let category: BillingCategory = 'utility';
+        const n = String(templateName).toLowerCase();
+        if (n.includes('auth')) category = 'authentication';
+        else if (n.includes('market') || n.includes('promo')) category = 'marketing';
+        const plan = await resolveUserPricePlan(userId);
+        const amount = basePriceForCategory(plan, category);
+        if (amount > 0) {
+          const balRes = await pool.query('SELECT balance_paise FROM wallet_accounts WHERE user_id = $1', [userId]);
+          const balance = balRes.rows[0]?.balance_paise ?? 0;
+          if (balance < amount) {
+            return res.status(402).json({ success: false, message: 'Insufficient wallet balance' });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Pre-send balance check failed (continuing):', e);
+    }
+
     const data = await withFallback({
       feature: "sendMediaTemplate",
       attempt: () => interaktClient.sendMediaTemplate(payload),
@@ -787,6 +909,36 @@ router.post("/messages/media", async (req, res, next) => {
         fallback: true,
       }),
     });
+
+    try {
+      const userId = (req as any).user?.userId as number | undefined;
+      const conversationId = data?.messages?.[0]?.id;
+      const templateName = (payload as any)?.template?.name || '';
+      let category: BillingCategory = 'utility';
+      const n = String(templateName).toLowerCase();
+      if (n.includes('auth')) category = 'authentication';
+      else if (n.includes('market') || n.includes('promo')) category = 'marketing';
+      if (userId && conversationId) {
+        const ins = await upsertBillingLog({
+          userId,
+          conversationId,
+          category,
+          recipientNumber: payload.to,
+          startTime: new Date(),
+          endTime: new Date(),
+          billingStatus: 'pending',
+        });
+        if (ins) {
+          const amountRes = await pool.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+          const row = amountRes.rows[0];
+          if (row) {
+            await chargeWalletForBilling({ userId, conversationId, amountPaise: row.amount_paise, currency: row.amount_currency });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('send media billing log skipped:', e);
+    }
 
     res.status(202).json(data);
   } catch (err) {
@@ -1112,7 +1264,7 @@ router.post("/messages/media", async (req, res, next) => {
  *                         type: string
  */
 // POST /api/interakt/session-messages
-router.post("/session-messages", async (req, res, next) => {
+router.post("/session-messages", authenticateToken, async (req, res, next) => {
   try {
     const payload = z
       .object({
@@ -1188,6 +1340,24 @@ router.post("/session-messages", async (req, res, next) => {
       })
       .parse(req.body);
 
+    // Pre-send balance check for service category
+    try {
+      const userId = (req as any).user?.userId as number | undefined;
+      if (userId) {
+        const plan = await resolveUserPricePlan(userId);
+        const amount = basePriceForCategory(plan, 'service');
+        if (amount > 0) {
+          const balRes = await pool.query('SELECT balance_paise FROM wallet_accounts WHERE user_id = $1', [userId]);
+          const balance = balRes.rows[0]?.balance_paise ?? 0;
+          if (balance < amount) {
+            return res.status(402).json({ success: false, message: 'Insufficient wallet balance' });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Pre-send balance check failed (continuing):', e);
+    }
+
     const data = await withFallback({
       feature: "sendSessionMessage",
       attempt: () => interaktClient.sendSessionMessage(payload),
@@ -1198,6 +1368,31 @@ router.post("/session-messages", async (req, res, next) => {
         fallback: true,
       }),
     });
+
+    try {
+      const userId = (req as any).user?.userId as number | undefined;
+      const conversationId = data?.messages?.[0]?.id;
+      if (userId && conversationId) {
+        const ins = await upsertBillingLog({
+          userId,
+          conversationId,
+          category: 'service',
+          recipientNumber: payload.to,
+          startTime: new Date(),
+          endTime: new Date(),
+          billingStatus: 'pending',
+        });
+        if (ins) {
+          const amountRes = await pool.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+          const row = amountRes.rows[0];
+          if (row) {
+            await chargeWalletForBilling({ userId, conversationId, amountPaise: row.amount_paise, currency: row.amount_currency });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('session message billing log skipped:', e);
+    }
 
     res.status(202).json(data);
   } catch (err) {
