@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { ContactService, CreateContactData, UpdateContactData } from "../services/contactService";
 import { pool } from "../config/database";
+import { authenticateToken } from "../middleware/authMiddleware";
 
 const router = Router();
 
@@ -152,7 +153,7 @@ const router = Router();
  *       500:
  *         description: Internal server error
  */
-router.get("/", async (req, res, next) => {
+router.get("/", authenticateToken, async (req, res, next) => {
   try {
     const querySchema = z.object({
       limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -201,7 +202,7 @@ router.get("/", async (req, res, next) => {
  *       500:
  *         description: Internal server error
  */
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", authenticateToken, async (req, res, next) => {
   try {
     const paramsSchema = z.object({
       id: z.coerce.number().int().positive(),
@@ -248,7 +249,7 @@ router.get("/:id", async (req, res, next) => {
  *       500:
  *         description: Internal server error
  */
-router.post("/", async (req, res, next) => {
+router.post("/", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       name: z.string().optional(),
@@ -316,7 +317,7 @@ router.post("/", async (req, res, next) => {
  *       500:
  *         description: Internal server error
  */
-router.put("/:id", async (req, res, next) => {
+router.put("/:id", authenticateToken, async (req, res, next) => {
   try {
     const paramsSchema = z.object({
       id: z.coerce.number().int().positive(),
@@ -391,7 +392,7 @@ router.put("/:id", async (req, res, next) => {
  *       500:
  *         description: Internal server error
  */
-router.delete("/:id", async (req, res, next) => {
+router.delete("/:id", authenticateToken, async (req, res, next) => {
   try {
     const paramsSchema = z.object({
       id: z.coerce.number().int().positive(),
@@ -460,7 +461,7 @@ router.delete("/:id", async (req, res, next) => {
  *                     skipped_duplicate_rows:
  *                       type: integer
  */
-router.post("/import", async (req, res, next) => {
+router.post("/import", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       upsert: z.boolean().optional().default(true),

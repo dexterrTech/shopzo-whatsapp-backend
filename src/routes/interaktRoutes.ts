@@ -218,7 +218,7 @@ router.post("/interaktWebhook", async (req, res) => {
  *                   type: string
  */
 // POST /api/interakt/test-message - Test message endpoint matching sir's curl
-router.post("/test-message", async (req, res, next) => {
+router.post("/test-message", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       to: z.string().min(1),
@@ -267,17 +267,10 @@ router.post("/test-message", async (req, res, next) => {
  *     tags:
  *       - Phone Numbers
  *     summary: Get Phone Numbers
- *     description: Returns Interakt phone numbers or mocked data when fallback is active.
- *     parameters:
- *       - in: query
- *         name: sort
- *         schema:
- *           type: string
- *           enum: [asc, desc]
- *         description: Sort order for phone numbers
+ *     description: Returns all phone numbers associated with your WABA ID from Interakt
  *     responses:
  *       200:
- *         description: List of phone numbers
+ *         description: List of phone numbers retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -288,45 +281,106 @@ router.post("/test-message", async (req, res, next) => {
  *                   items:
  *                     type: object
  *                     properties:
- *                       id:
- *                         type: string
  *                       verified_name:
  *                         type: string
  *                       display_phone_number:
  *                         type: string
+ *                       id:
+ *                         type: string
+ *                         description: This is the phone_number_id you need for webhook configuration
  *                       quality_rating:
  *                         type: string
  *                       platform_type:
  *                         type: string
  */
-// GET /api/interakt/phone-numbers
-router.get("/phone-numbers", async (req, res, next) => {
+// GET /api/interakt/phone-numbers - Get Phone Numbers from Interakt
+router.get("/phone-numbers", authenticateToken, async (req, res, next) => {
   try {
-    const querySchema = z.object({ sort: z.enum(["asc", "desc"]).optional() });
-    const query = querySchema.parse(req.query);
-
-    const data = await withFallback({
+    console.log("Getting phone numbers from Interakt...");
+    
+    const response = await withFallback({
       feature: "getPhoneNumbers",
-      attempt: () => interaktClient.getPhoneNumbers({ sort: query.sort }),
-      fallback: async () => ({
-        data: [
+      attempt: async () => {
+        const url = `https://amped-express.interakt.ai/api/v17.0/${env.INTERAKT_WABA_ID}/phone_numbers`;
+        console.log("Attempting phone numbers API call with:", {
+          url,
+          token: env.INTERAKT_ACCESS_TOKEN ? `${env.INTERAKT_ACCESS_TOKEN.substring(0, 20)}...` : 'NOT_SET',
+          waba_id: env.INTERAKT_WABA_ID || 'NOT_SET'
+        });
+        
+        // Try different header combinations
+        const headerCombinations: Record<string, string>[] = [
           {
-            verified_name: "Mock Business",
-            code_verification_status: "VERIFIED",
-            display_phone_number: "+91 70000 00000",
-            quality_rating: "GREEN",
-            platform_type: "CLOUD_API",
-            throughput: { level: "HIGH" },
-            last_onboarded_time: new Date().toISOString(),
-            id: "0000000000000",
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'Content-Type': 'application/json'
           },
-        ],
-        paging: { cursors: { before: "", after: "" } },
-        fallback: true,
-      }),
+          {
+            'Authorization': `Bearer ${env.INTERAKT_ACCESS_TOKEN || ''}`,
+            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'Content-Type': 'application/json'
+          },
+          {
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+            'x-waba-id': env.INTERAKT_WABA_ID || ''
+          }
+        ];
+
+        let lastError = null;
+        
+        for (const headers of headerCombinations) {
+          try {
+            console.log(`Trying headers:`, Object.keys(headers));
+            
+            const response = await fetch(url, {
+              method: 'GET',
+              headers
+            });
+
+            console.log(`Headers ${Object.keys(headers)} response status:`, response.status);
+            
+            if (response.ok) {
+              const responseData = await response.json();
+              console.log("Phone numbers API success response:", responseData);
+              return responseData;
+            } else {
+              const errorText = await response.text();
+              console.log(`Headers ${Object.keys(headers)} error response:`, errorText);
+              if (response.status !== 400) {
+                // If it's not a 400 error, this header combination might be working
+                lastError = new Error(`Phone numbers API error: ${response.status} ${response.statusText} - ${errorText}`);
+                break;
+              }
+              lastError = new Error(`Phone numbers API error: ${response.status} ${response.statusText} - ${errorText}`);
+            }
+          } catch (headerError: any) {
+            console.log(`Headers ${Object.keys(headers)} failed:`, headerError.message);
+            lastError = headerError;
+          }
+        }
+        
+        // If all headers failed, throw the last error
+        throw lastError || new Error("All header combinations failed");
+      },
+      fallback: () => {
+        console.log("Using fallback response for phone numbers");
+        return {
+          data: [
+            {
+              verified_name: "Fallback Business",
+              display_phone_number: "+91 88888 88888",
+              id: env.INTERAKT_PHONE_NUMBER_ID || "fallback_phone_id",
+              quality_rating: "GREEN",
+              platform_type: "CLOUD_API"
+            }
+          ],
+          fallback: true
+        };
+      }
     });
 
-    res.json(data);
+    console.log("Phone numbers retrieved:", response);
+    res.json(response);
   } catch (err) {
     next(err);
   }
@@ -380,7 +434,7 @@ router.get("/phone-numbers", async (req, res, next) => {
  *                         type: array
  */
 // GET /api/interakt/templates
-router.get("/templates", async (req, res, next) => {
+router.get("/templates", authenticateToken, async (req, res, next) => {
   try {
     const query = z
       .object({
@@ -546,7 +600,7 @@ router.get("/templates", async (req, res, next) => {
  *                   type: string
  */
 // POST /api/interakt/templates
-router.post("/templates", async (req, res, next) => {
+router.post("/templates", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       name: z.string().min(1),
@@ -570,7 +624,7 @@ router.post("/templates", async (req, res, next) => {
 });
 
 // POST /api/interakt/templates/media
-router.post("/templates/media", async (req, res, next) => {
+router.post("/templates/media", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       name: z.string().min(1),
@@ -638,7 +692,7 @@ router.post("/templates/media", async (req, res, next) => {
  *                   type: array
  */
 // GET /api/interakt/templates/:id
-router.get("/templates/:id", async (req, res, next) => {
+router.get("/templates/:id", authenticateToken, async (req, res, next) => {
   try {
     const { id } = z.object({ id: z.string() }).parse(req.params);
 
@@ -1461,8 +1515,8 @@ router.post("/session-messages", authenticateToken, async (req, res, next) => {
  *                 phone_number_id:
  *                   type: string
  */
-// POST /api/interakt/tech-partner-onboarding - Tech Partner Onboarding API
-router.post("/tech-partner-onboarding", async (req, res, next) => {
+// POST /api/interakt/tech-partner-onboarding - Tech Partner Onboarding API (TEMP: No auth for testing)
+router.post("/tech-partner-onboarding", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       entry: z.array(z.object({
@@ -1471,7 +1525,8 @@ router.post("/tech-partner-onboarding", async (req, res, next) => {
             event: z.literal("PARTNER_ADDED"),
             waba_info: z.object({
               waba_id: z.string(),
-              solution_id: z.string()
+              solution_id: z.string(),
+              phone_number: z.string().optional(),
             })
           })
         }))
@@ -1492,28 +1547,108 @@ router.post("/tech-partner-onboarding", async (req, res, next) => {
     const onboardingResponse = await withFallback({
       feature: "techPartnerOnboarding",
       attempt: async () => {
-        const response = await fetch(`${env.INTERAKT_API_BASE_URL}/v1/organizations/tp-signup/`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${env.INTERAKT_ACCESS_TOKEN}`,
-            'Content-Type': 'application/json'
-          },
+        console.log("Node.js version:", process.version);
+        console.log("Fetch available:", typeof fetch !== 'undefined');
+        console.log("Attempting Interakt API call with:", {
+          url: `https://api.interakt.ai/v1/organizations/tp-signup/`,
+          token: env.INTERAKT_ACCESS_TOKEN ? `${env.INTERAKT_ACCESS_TOKEN.substring(0, 20)}...` : 'NOT_SET',
           body: JSON.stringify(body)
         });
+        
+        try {
+          // Try fetch first
+          if (typeof fetch !== 'undefined') {
+            const response = await fetch(`https://api.interakt.ai/v1/organizations/tp-signup/`, {
+              method: 'POST',
+              headers: {
+                // Per Interakt docs, this endpoint expects the raw token (no Bearer prefix)
+                'Authorization': env.INTERAKT_ACCESS_TOKEN,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(body)
+            });
 
-        if (!response.ok) {
-          throw new Error(`Interakt API error: ${response.status} ${response.statusText}`);
+            console.log("Interakt API response status:", response.status);
+            console.log("Interakt API response headers:", Object.fromEntries(response.headers.entries()));
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              console.error("Interakt API error response:", errorText);
+              throw new Error(`Interakt API error: ${response.status} ${response.statusText} - ${errorText}`);
+            }
+
+            const responseData = await response.json();
+            console.log("Interakt API success response:", responseData);
+            console.log("🔍 IMPORTANT: Check this response for phone_number_id!");
+            return responseData;
+          } else {
+            // Fallback to Node.js http module
+            console.log("Fetch not available, using Node.js http module");
+            const https = require('https');
+            
+            return new Promise((resolve, reject) => {
+              const postData = JSON.stringify(body);
+              const options = {
+                hostname: 'api.interakt.ai',
+                port: 443,
+                path: '/v1/organizations/tp-signup/',
+                method: 'POST',
+                headers: {
+                  'Authorization': env.INTERAKT_ACCESS_TOKEN,
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(postData)
+                }
+              };
+
+              const req = https.request(options, (res: any) => {
+                let data = '';
+                res.on('data', (chunk: any) => {
+                  data += chunk;
+                });
+                res.on('end', () => {
+                  console.log("Interakt API response status:", res.statusCode);
+                  if (res.statusCode >= 200 && res.statusCode < 300) {
+                    try {
+                      const responseData = JSON.parse(data);
+                      console.log("Interakt API success response:", responseData);
+                      console.log("🔍 IMPORTANT: Check this response for phone_number_id!");
+                      resolve(responseData);
+                    } catch (e) {
+                      reject(new Error(`Failed to parse response: ${data}`));
+                    }
+                  } else {
+                    reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+                  }
+                });
+              });
+
+              req.on('error', (err: any) => {
+                reject(err);
+              });
+
+              req.write(postData);
+              req.end();
+            });
+          }
+        } catch (fetchError: any) {
+          console.error("Fetch error details:", {
+            message: fetchError.message,
+            stack: fetchError.stack,
+            name: fetchError.name
+          });
+          throw fetchError;
         }
-
-        return await response.json();
       },
-      fallback: () => ({
-        event: "WABA_ONBOARDED",
-        isv_name_token: "mock-token-" + Math.random().toString(36).slice(2, 8),
-        waba_id: wabaInfo.waba_id,
-        phone_number_id: "mock-phone-" + Math.random().toString(36).slice(2, 8),
-        fallback: true
-      })
+      fallback: () => {
+        console.log("Using fallback response for tech partner onboarding");
+        return {
+          event: "WABA_ONBOARDED",
+          isv_name_token: "mock-token-" + Math.random().toString(36).slice(2, 8),
+          waba_id: wabaInfo.waba_id,
+          phone_number_id: "mock-phone-" + Math.random().toString(36).slice(2, 8),
+          fallback: true
+        };
+      }
     });
 
     console.log("Tech partner onboarding completed:", onboardingResponse);
@@ -1565,7 +1700,7 @@ router.post("/tech-partner-onboarding", async (req, res, next) => {
  *                   type: string
  */
 // POST /api/interakt/webhook-url - Add/Update Webhook URL
-router.post("/webhook-url", async (req, res, next) => {
+router.post("/webhook-url", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       waba_id: z.string(),
@@ -1578,24 +1713,140 @@ router.post("/webhook-url", async (req, res, next) => {
     const response = await withFallback({
       feature: "configureWebhookUrl",
       attempt: async () => {
-        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${waba_id}/subscribed_apps`, {
-          method: 'POST',
-          headers: {
-            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': waba_id,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            override_callback_uri: webhook_url,
-            verify_token: verify_token
-          })
+        console.log("Attempting webhook configuration with:", {
+          url: `${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${waba_id}/subscribed_apps`,
+          token: env.INTERAKT_ACCESS_TOKEN ? `${env.INTERAKT_ACCESS_TOKEN.substring(0, 20)}...` : 'NOT_SET',
+          waba_id,
+          webhook_url,
+          verify_token
         });
+        
+        try {
+          // Try different URL formats based on Interakt documentation
+          const urlFormats = [
+            `https://amped-express.interakt.ai/api/v17.0/${env.INTERAKT_PHONE_NUMBER_ID}`,
+            `https://amped-express.interakt.ai/api/v18.0/${env.INTERAKT_PHONE_NUMBER_ID}`,
+            `https://amped-express.interakt.ai/api/v19.0/${env.INTERAKT_PHONE_NUMBER_ID}`,
+            `https://amped-express.interakt.ai/api/v20.0/${env.INTERAKT_PHONE_NUMBER_ID}`,
+            `https://amped-express.interakt.ai/api/v21.0/${env.INTERAKT_PHONE_NUMBER_ID}`,
+            `https://amped-express.interakt.ai/api/v22.0/${env.INTERAKT_PHONE_NUMBER_ID}`,
+            `https://amped-express.interakt.ai/api/v17.0/PHONE_NUMBER_ID`.replace('PHONE_NUMBER_ID', env.INTERAKT_PHONE_NUMBER_ID || ''),
+            `${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_PHONE_NUMBER_ID}`,
+            `${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/subscribed_apps`
+          ];
 
-        if (!response.ok) {
-          throw new Error(`Webhook configuration error: ${response.status} ${response.statusText}`);
+          let lastError = null;
+          
+          for (const url of urlFormats) {
+            try {
+              console.log(`Trying webhook configuration URL: ${url}`);
+              
+              // Try different header combinations
+              const headerCombinations: Record<string, string>[] = [
+                {
+                  'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+                  'x-waba-id': waba_id,
+                  'x-phone-number-id': env.INTERAKT_PHONE_NUMBER_ID || '',
+                  'Content-Type': 'application/json'
+                },
+                {
+                  'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+                  'x-waba-id': waba_id,
+                  'Content-Type': 'application/json'
+                },
+                {
+                  'Authorization': env.INTERAKT_ACCESS_TOKEN || '',
+                  'x-waba-id': waba_id,
+                  'Content-Type': 'application/json'
+                }
+              ];
+
+              let headerSuccess = false;
+              
+              for (const headers of headerCombinations) {
+                try {
+                  console.log(`Trying headers:`, Object.keys(headers));
+                  
+                  // Try different request body formats
+                  const bodyFormats = [
+                    {
+                      webhook_configuration: {
+                        override_callback_uri: webhook_url,
+                        verify_token: verify_token
+                      }
+                    },
+                    {
+                      override_callback_uri: webhook_url,
+                      verify_token: verify_token
+                    },
+                    {
+                      callback_uri: webhook_url,
+                      verify_token: verify_token
+                    }
+                  ];
+                  
+                  let bodySuccess = false;
+                  
+                  for (const bodyFormat of bodyFormats) {
+                    try {
+                      console.log(`Trying body format:`, Object.keys(bodyFormat));
+                      
+                      const response = await fetch(url, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify(bodyFormat)
+                      });
+
+                      console.log(`URL ${url} with headers ${Object.keys(headers)} and body ${Object.keys(bodyFormat)} response status:`, response.status);
+                      
+                      if (response.ok) {
+                        const responseData = await response.json();
+                        console.log("Webhook configuration success response:", responseData);
+                        return responseData;
+                      } else {
+                        const errorText = await response.text();
+                        console.log(`URL ${url} with headers ${Object.keys(headers)} and body ${Object.keys(bodyFormat)} error response:`, errorText);
+                        if (response.status !== 400) {
+                          // If it's not a 400 error, this combination might be working
+                          bodySuccess = true;
+                          lastError = new Error(`Webhook configuration error: ${response.status} ${response.statusText} - ${errorText}`);
+                          break;
+                        }
+                      }
+                    } catch (bodyError: any) {
+                      console.log(`Body format ${Object.keys(bodyFormat)} failed:`, bodyError.message);
+                    }
+                  }
+                  
+                  if (bodySuccess) {
+                    break; // Move to next header if body worked but header didn't
+                  }
+                  
+                } catch (headerError: any) {
+                  console.log(`Headers ${Object.keys(headers)} failed:`, headerError.message);
+                }
+              }
+              
+              if (headerSuccess) {
+                break; // Move to next URL if headers worked but URL didn't
+              }
+              
+            } catch (urlError: any) {
+              console.log(`URL ${url} failed:`, urlError.message);
+              lastError = urlError;
+            }
+          }
+          
+          // If all URLs failed, throw the last error
+          throw lastError || new Error("All webhook configuration URLs failed");
+        } catch (fetchError: any) {
+          console.error("Webhook configuration fetch error details:", {
+            message: fetchError.message,
+            stack: fetchError.stack,
+            name: fetchError.name
+          });
+          throw fetchError;
         }
-
-        return await response.json();
       },
       fallback: () => ({
         success: true,
@@ -1679,7 +1930,7 @@ router.post("/webhook-url", async (req, res, next) => {
  *                   description: Indicates if fallback data was used
  */
 // GET /api/interakt/analytics - Message Analytics API
-router.get("/analytics", async (req, res, next) => {
+router.get("/analytics", authenticateToken, async (req, res, next) => {
   try {
     const querySchema = z.object({
       start: z.coerce.number().optional(),
@@ -1785,7 +2036,7 @@ router.get("/analytics", async (req, res, next) => {
  *                       format: float
  */
 // GET /api/interakt/analytics/summary - Analytics Summary
-router.get("/analytics/summary", async (req, res, next) => {
+router.get("/analytics/summary", authenticateToken, async (req, res, next) => {
   try {
     const querySchema = z.object({
       start: z.coerce.number().optional(),
