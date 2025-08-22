@@ -129,6 +129,27 @@ export const requireSuperAdmin = (req: Request, res: Response, next: NextFunctio
 };
 
 /**
+ * Middleware to require aggregator role
+ */
+export const requireAggregator = (req: Request, res: Response, next: NextFunction) => {
+  if (!req.user) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Authentication required' 
+    });
+  }
+
+  if (req.user.role !== 'aggregator') {
+    return res.status(403).json({ 
+      success: false, 
+      message: 'Aggregator access required' 
+    });
+  }
+
+  next();
+};
+
+/**
  * Optional authentication middleware (doesn't fail if no token)
  */
 export const optionalAuth = async (req: Request, res: Response, next: NextFunction) => {
