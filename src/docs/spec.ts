@@ -162,6 +162,12 @@ const options: swaggerJSDoc.Options = {
         }
       }
     },
+    // Apply JWT bearer auth to all endpoints by default in Swagger UI
+    security: [
+      {
+        bearerAuth: []
+      }
+    ],
   },
   apis: [
     // Try to scan both TypeScript and JavaScript files

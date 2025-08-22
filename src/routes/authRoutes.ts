@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AuthService } from '../services/authService';
-import { authenticateToken, requireAdmin, requireSuperAdmin } from '../middleware/authMiddleware';
+import { authenticateToken, requireAdmin, requireSuperAdmin, requireAggregator } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -19,6 +19,23 @@ const loginSchema = z.object({
 
 const updateRoleSchema = z.object({
   role: z.enum(['user', 'aggregator', 'super_admin'])
+});
+
+const createUserSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  password: z.string().min(6)
+});
+
+const setPasswordSchema = z.object({
+  password: z.string().min(6)
+});
+
+const adminCreateBusinessSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  password: z.string().min(6),
+  aggregator_user_id: z.number().int().positive()
 });
 
 /**
@@ -381,6 +398,122 @@ router.put('/role/:userId', authenticateToken, requireSuperAdmin, async (req, re
       success: false,
       message: 'Internal server error'
     });
+  }
+});
+
+/**
+ * Create Aggregator (Super Admin)
+ */
+router.post('/create-aggregator', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const validated = createUserSchema.parse(req.body);
+    const user = await AuthService.createAggregator(validated);
+    res.status(201).json({ success: true, message: 'Aggregator created', data: user });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    if (error instanceof Error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/**
+ * Aggregator: Create Business under self
+ */
+router.post('/aggregator/business', authenticateToken, requireAggregator, async (req, res) => {
+  try {
+    const validated = createUserSchema.parse(req.body);
+    const user = await AuthService.createBusinessUnderAggregator(req.user!.userId, validated);
+    res.status(201).json({ success: true, message: 'Business created', data: user });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    if (error instanceof Error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/**
+ * Aggregator: List businesses
+ */
+router.get('/aggregator/businesses', authenticateToken, requireAggregator, async (req, res) => {
+  try {
+    const users = await AuthService.listBusinessesForAggregator(req.user!.userId);
+    res.json({ success: true, data: users });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/**
+ * Super Admin: Move business to another aggregator
+ */
+router.post('/move-business', authenticateToken, requireSuperAdmin, async (req, res) => {
+  const schema = z.object({ child_user_id: z.number().int().positive(), new_aggregator_user_id: z.number().int().positive() });
+  try {
+    const { child_user_id, new_aggregator_user_id } = schema.parse(req.body);
+    await AuthService.moveBusinessToAggregator(child_user_id, new_aggregator_user_id);
+    res.json({ success: true, message: 'Business moved successfully' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    if (error instanceof Error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/**
+ * Super Admin: Create business under specified aggregator
+ */
+router.post('/admin/create-business', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const validated = adminCreateBusinessSchema.parse(req.body);
+    const user = await AuthService.createBusinessUnderAggregator(validated.aggregator_user_id, {
+      name: validated.name,
+      email: validated.email,
+      password: validated.password
+    });
+    res.status(201).json({ success: true, message: 'Business created', data: user });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    if (error instanceof Error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+/**
+ * Super Admin: Set/Update user password
+ */
+router.post('/set-password/:userId', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, message: 'Invalid user ID' });
+    }
+    const { password } = setPasswordSchema.parse(req.body);
+    await AuthService.setUserPassword(userId, password);
+    res.json({ success: true, message: 'Password updated' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    if (error instanceof Error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
 

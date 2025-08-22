@@ -3,6 +3,7 @@ import { z } from "zod";
 import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
+import { authenticateToken } from "../middleware/authMiddleware";
 
 const router = Router();
 
@@ -104,15 +105,33 @@ const router = Router();
  *                   type: boolean
  */
 // GET /api/acc-matrics/message-analytics
-router.get("/message-analytics", async (req, res, next) => {
+router.get("/message-analytics", authenticateToken, async (req, res, next) => {
   try {
     const querySchema = z.object({
       start: z.coerce.number(),
       end: z.coerce.number(),
       granularity: z.enum(["HALF_HOUR", "DAY", "MONTH"]),
-      phone_numbers: z.array(z.string()).optional(),
-      product_types: z.array(z.number()).optional(),
-      country_codes: z.array(z.string()).optional(),
+      // Accept single value or repeated keys; coerce to array of strings
+      phone_numbers: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.string()).optional()),
+      // Accept single/repeated values and coerce strings to numbers
+      product_types: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          const values = Array.isArray(v) ? v : [v];
+          return values.map((x) => (typeof x === "number" ? x : Number(x)));
+        }, z.array(z.number()).optional()),
+      // Accept single value or repeated keys; coerce to array of strings
+      country_codes: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          return Array.isArray(v) ? v : [v as any];
+        }, z.array(z.string()).optional()),
     });
 
     const query = querySchema.parse(req.query);
@@ -307,7 +326,7 @@ router.get("/message-analytics", async (req, res, next) => {
  *                   type: boolean
  */
 // GET /api/acc-matrics/conversation-analytics
-router.get("/conversation-analytics", async (req, res, next) => {
+router.get("/conversation-analytics", authenticateToken, async (req, res, next) => {
   try {
     const querySchema = z.object({
       start: z.coerce.number(),
@@ -420,7 +439,7 @@ router.get("/conversation-analytics", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/acc-matrics/enable-template-analytics
-router.post("/enable-template-analytics", async (req, res, next) => {
+router.post("/enable-template-analytics", authenticateToken, async (req, res, next) => {
   try {
     const data = await withFallback({
       feature: "enableTemplateAnalytics",
@@ -558,7 +577,7 @@ router.post("/enable-template-analytics", async (req, res, next) => {
  *                   type: boolean
  */
 // GET /api/acc-matrics/template-analytics
-router.get("/template-analytics", async (req, res, next) => {
+router.get("/template-analytics", authenticateToken, async (req, res, next) => {
   try {
     const querySchema = z.object({
       start: z.coerce.number(),
@@ -697,7 +716,7 @@ router.get("/template-analytics", async (req, res, next) => {
  *                   type: boolean
  */
 // GET /api/acc-matrics/analytics-summary
-router.get("/analytics-summary", async (req, res, next) => {
+router.get("/analytics-summary", authenticateToken, async (req, res, next) => {
   try {
     const querySchema = z.object({
       start: z.coerce.number(),

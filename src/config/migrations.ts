@@ -29,8 +29,8 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
       CREATE INDEX IF NOT EXISTS idx_contacts_created_at ON contacts(created_at);
     `);
-    
-    // Create users_whatsapp table
+
+    // Create users table (already in use by auth) if not exists
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users_whatsapp (
         id SERIAL PRIMARY KEY,
@@ -43,19 +43,180 @@ export async function runMigrations() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_login_at TIMESTAMP,
-        approved_by INTEGER REFERENCES users_whatsapp(id),
+        approved_by INTEGER,
         approved_at TIMESTAMP
       );
     `);
-    
-    // Create indexes for users table
+
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_users_email ON users_whatsapp(email);
       CREATE INDEX IF NOT EXISTS idx_users_role ON users_whatsapp(role);
       CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users_whatsapp(is_approved);
       CREATE INDEX IF NOT EXISTS idx_users_created_at ON users_whatsapp(created_at);
     `);
+
+    // Price plans for configurable conversation pricing
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS price_plans (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL DEFAULT 'Default',
+        currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+        utility_paise INTEGER NOT NULL DEFAULT 0,
+        marketing_paise INTEGER NOT NULL DEFAULT 0,
+        authentication_paise INTEGER NOT NULL DEFAULT 0,
+        service_paise INTEGER NOT NULL DEFAULT 0,
+        is_default BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_price_plans_default ON price_plans(is_default);
+    `);
+
+    // Create billing_logs table for tracking conversation costs
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS billing_logs (
+        id SERIAL PRIMARY KEY,
+        conversation_id VARCHAR(255) NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        category VARCHAR(50) NOT NULL CHECK (category IN ('utility', 'marketing', 'service', 'authentication')),
+        recipient_number VARCHAR(20) NOT NULL,
+        start_time TIMESTAMP NOT NULL,
+        end_time TIMESTAMP NOT NULL,
+        billing_status VARCHAR(20) DEFAULT 'pending' CHECK (billing_status IN ('pending', 'paid', 'failed')),
+        amount_paise INTEGER NOT NULL,
+        amount_currency VARCHAR(10) DEFAULT 'INR',
+        country_code VARCHAR(10),
+        country_name VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_billing_logs_user_id ON billing_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_billing_logs_category ON billing_logs(category);
+      CREATE INDEX IF NOT EXISTS idx_billing_logs_start_time ON billing_logs(start_time);
+      CREATE INDEX IF NOT EXISTS idx_billing_logs_conversation_id ON billing_logs(conversation_id);
+      CREATE INDEX IF NOT EXISTS idx_billing_logs_billing_status ON billing_logs(billing_status);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_logs_conversation_per_user ON billing_logs(user_id, conversation_id);
+    `);
+
+    // Safe column adds for billing logs
+    await pool.query(`
+      ALTER TABLE billing_logs
+      ADD COLUMN IF NOT EXISTS price_plan_id INTEGER REFERENCES price_plans(id);
+    `);
+    await pool.query(`
+      ALTER TABLE billing_logs
+      ADD COLUMN IF NOT EXISTS wallet_tx_id INTEGER REFERENCES wallet_transactions(id);
+    `);
     
+    // Wallet accounts and transactions
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wallet_accounts (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL UNIQUE REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+        balance_paise INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_wallet_accounts_user_id ON wallet_accounts(user_id);
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        transaction_id VARCHAR(64) UNIQUE NOT NULL,
+        type VARCHAR(20) NOT NULL CHECK (type IN ('RECHARGE','DEBIT','REFUND','ADJUSTMENT')),
+        status VARCHAR(20) NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','pending','failed')),
+        amount_paise INTEGER NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+        details VARCHAR(255),
+        from_label VARCHAR(100),
+        to_label VARCHAR(100),
+        balance_after_paise INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_wallet_tx_user_id ON wallet_transactions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_wallet_tx_created_at ON wallet_transactions(created_at);
+      CREATE INDEX IF NOT EXISTS idx_wallet_tx_type ON wallet_transactions(type);
+      CREATE INDEX IF NOT EXISTS idx_wallet_tx_status ON wallet_transactions(status);
+    `);
+
+    // User-specific price plan assignments
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_price_plans (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        price_plan_id INTEGER NOT NULL REFERENCES price_plans(id) ON DELETE RESTRICT,
+        effective_from TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_price_plans_user_id ON user_price_plans(user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_price_plans_effective ON user_price_plans(effective_from DESC);
+    `);
+
+    // WABA/phone to user mapping for webhook resolution
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS waba_sources (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        phone_number_id TEXT,
+        waba_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_waba_sources_user_id ON waba_sources(user_id);
+      CREATE INDEX IF NOT EXISTS idx_waba_sources_phone ON waba_sources(phone_number_id);
+      CREATE INDEX IF NOT EXISTS idx_waba_sources_waba ON waba_sources(waba_id);
+    `);
+
+    // Aggregator/tenant mapping
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_children (
+        parent_user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        child_user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (parent_user_id, child_user_id)
+      );
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_children_parent ON user_children(parent_user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_children_child ON user_children(child_user_id);
+    `);
+
+    // Country/category overrides per plan
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS price_plan_overrides (
+        id SERIAL PRIMARY KEY,
+        price_plan_id INTEGER NOT NULL REFERENCES price_plans(id) ON DELETE CASCADE,
+        country_code VARCHAR(10) NOT NULL,
+        category VARCHAR(50) NOT NULL CHECK (category IN ('utility','marketing','authentication','service')),
+        amount_paise INTEGER NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+        UNIQUE(price_plan_id, country_code, category)
+      );
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_plan_overrides_plan ON price_plan_overrides(price_plan_id);
+      CREATE INDEX IF NOT EXISTS idx_plan_overrides_country ON price_plan_overrides(country_code);
+    `);
+
     console.log('Migrations completed successfully');
   } catch (error) {
     console.error('Migration failed:', error);

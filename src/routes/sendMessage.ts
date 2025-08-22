@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
+import { authenticateToken } from "../middleware/authMiddleware";
 
 const router = Router();
 
@@ -100,7 +101,7 @@ const router = Router();
  *                   type: boolean
  */
 // POST /api/send-message/:phone_number_id/text
-router.post("/:phone_number_id/text", async (req, res, next) => {
+router.post("/:phone_number_id/text", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -260,7 +261,7 @@ router.post("/:phone_number_id/text", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/send-message/:phone_number_id/media
-router.post("/:phone_number_id/media", async (req, res, next) => {
+router.post("/:phone_number_id/media", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -426,7 +427,7 @@ router.post("/:phone_number_id/media", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/send-message/:phone_number_id/catalog
-router.post("/:phone_number_id/catalog", async (req, res, next) => {
+router.post("/:phone_number_id/catalog", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -586,7 +587,7 @@ router.post("/:phone_number_id/catalog", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/send-message/:phone_number_id/single-product
-router.post("/:phone_number_id/single-product", async (req, res, next) => {
+router.post("/:phone_number_id/single-product", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -780,7 +781,7 @@ router.post("/:phone_number_id/single-product", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/send-message/:phone_number_id/multi-product
-router.post("/:phone_number_id/multi-product", async (req, res, next) => {
+router.post("/:phone_number_id/multi-product", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -920,7 +921,7 @@ router.post("/:phone_number_id/multi-product", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/send-message/:phone_number_id/reply
-router.post("/:phone_number_id/reply", async (req, res, next) => {
+router.post("/:phone_number_id/reply", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -1020,7 +1021,7 @@ router.post("/:phone_number_id/reply", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/send-message/:phone_number_id/mark-read
-router.post("/:phone_number_id/mark-read", async (req, res, next) => {
+router.post("/:phone_number_id/mark-read", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
+import { authenticateToken } from "../middleware/authMiddleware";
 
 const router = Router();
 
@@ -55,7 +56,7 @@ const router = Router();
  *                   type: boolean
  */
 // POST /api/conversational-components/:phone_number_id/welcome-message
-router.post("/:phone_number_id/welcome-message", async (req, res, next) => {
+router.post("/:phone_number_id/welcome-message", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -161,7 +162,7 @@ router.post("/:phone_number_id/welcome-message", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/conversational-components/:phone_number_id/automation
-router.post("/:phone_number_id/automation", async (req, res, next) => {
+router.post("/:phone_number_id/automation", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -280,7 +281,7 @@ router.post("/:phone_number_id/automation", async (req, res, next) => {
  *                   type: boolean
  */
 // GET /api/conversational-components/:phone_number_id/configuration
-router.get("/:phone_number_id/configuration", async (req, res, next) => {
+router.get("/:phone_number_id/configuration", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
 

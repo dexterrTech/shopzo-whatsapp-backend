@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
+import { authenticateToken } from "../middleware/authMiddleware";
 
 const router = Router();
 
@@ -66,7 +67,7 @@ const router = Router();
  *                   type: boolean
  */
 // GET /api/phone-numbers - Get all phone numbers
-router.get("/", async (req, res, next) => {
+router.get("/", authenticateToken, async (req, res, next) => {
   try {
     const data = await withFallback({
       feature: "getPhoneNumbers",
@@ -74,8 +75,8 @@ router.get("/", async (req, res, next) => {
         const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_WABA_ID}/phone_numbers`, {
           method: 'GET',
           headers: {
-            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN || 'rC8uFUXFoRz5jtnSbG2RzhEm6tVBgliN',
+            'x-waba-id': env.INTERAKT_WABA_ID || '1120328123487929',
             'Content-Type': 'application/json'
           }
         });
@@ -161,7 +162,7 @@ router.get("/", async (req, res, next) => {
  *                   type: boolean
  */
 // GET /api/phone-numbers/subscribed-apps - Get subscribed apps (MUST come before /:phone_number_id)
-router.get("/subscribed-apps", async (req, res, next) => {
+router.get("/subscribed-apps", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.query;
 
@@ -264,7 +265,7 @@ router.get("/subscribed-apps", async (req, res, next) => {
  *                   type: boolean
  */
 // GET /api/phone-numbers/:phone_number_id - Get phone number details
-router.get("/:phone_number_id", async (req, res, next) => {
+router.get("/:phone_number_id", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const { fields } = req.query;
@@ -371,7 +372,7 @@ router.get("/:phone_number_id", async (req, res, next) => {
  *                   type: boolean
  */
 // GET /api/phone-numbers/:phone_number_id/whatsapp-business-profile
-router.get("/:phone_number_id/whatsapp-business-profile", async (req, res, next) => {
+router.get("/:phone_number_id/whatsapp-business-profile", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const { fields } = req.query;
@@ -485,7 +486,7 @@ router.get("/:phone_number_id/whatsapp-business-profile", async (req, res, next)
  *                   type: boolean
  */
 // GET /api/phone-numbers/:phone_number_id/health-status
-router.get("/:phone_number_id/health-status", async (req, res, next) => {
+router.get("/:phone_number_id/health-status", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
 
@@ -617,7 +618,7 @@ router.get("/:phone_number_id/health-status", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/phone-numbers/:phone_number_id/whatsapp-business-profile
-router.post("/:phone_number_id/whatsapp-business-profile", async (req, res, next) => {
+router.post("/:phone_number_id/whatsapp-business-profile", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -700,7 +701,7 @@ router.post("/:phone_number_id/whatsapp-business-profile", async (req, res, next
  *                   type: boolean
  */
 // POST /api/phone-numbers/:phone_number_id/register
-router.post("/:phone_number_id/register", async (req, res, next) => {
+router.post("/:phone_number_id/register", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;
@@ -787,7 +788,7 @@ router.post("/:phone_number_id/register", async (req, res, next) => {
  *                   type: boolean
  */
 // POST /api/phone-numbers/:phone_number_id/webhook-configuration
-router.post("/:phone_number_id/webhook-configuration", async (req, res, next) => {
+router.post("/:phone_number_id/webhook-configuration", authenticateToken, async (req, res, next) => {
   try {
     const { phone_number_id } = req.params;
     const body = req.body;

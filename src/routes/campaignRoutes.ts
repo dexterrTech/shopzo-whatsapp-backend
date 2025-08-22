@@ -3,6 +3,7 @@ import { z } from "zod";
 import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
 import { ContactService } from "../services/contactService";
+import { authenticateToken } from "../middleware/authMiddleware";
 
 const router = Router();
 
@@ -85,7 +86,7 @@ const router = Router();
  *                   format: date-time
  */
 // POST /api/campaigns
-router.post("/", async (req, res, next) => {
+router.post("/", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       name: z.string().min(1),
@@ -168,7 +169,7 @@ router.post("/", async (req, res, next) => {
  *                   description: Indicates if fallback data was used
  */
 // POST /api/campaigns/send-template
-router.post("/send-template", async (req, res, next) => {
+router.post("/send-template", authenticateToken, async (req, res, next) => {
   try {
     const bodySchema = z.object({
       templateId: z.string(),
