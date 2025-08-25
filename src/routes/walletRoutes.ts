@@ -155,8 +155,17 @@ router.post('/recharge', authenticateToken, requireAdmin, async (req, res) => {
     const fromUserId = req.user!.userId;
     const validatedData = rechargeSchema.parse(req.body);
     
+    let transaction;
+    
     // Check if user is Super Admin or if they're recharging their own businesses
-    if (req.user!.role !== 'super_admin') {
+    if (req.user!.role === 'super_admin') {
+      // Super Admin recharges from system wallet
+      transaction = await WalletService.rechargeFromSystemWallet(
+        validatedData.toUserId,
+        validatedData.amountPaise,
+        validatedData.details
+      );
+    } else {
       // For aggregators, check if they're recharging their own businesses
       const relationships = await WalletService.getUserRelationships(fromUserId, 'business');
       const hasBusiness = relationships.some(rel => rel.child_user_id === validatedData.toUserId);
@@ -167,14 +176,14 @@ router.post('/recharge', authenticateToken, requireAdmin, async (req, res) => {
           message: 'You can only recharge wallets of your own businesses'
         });
       }
+      
+      transaction = await WalletService.rechargeWallet(
+        fromUserId,
+        validatedData.toUserId,
+        validatedData.amountPaise,
+        validatedData.details
+      );
     }
-    
-    const transaction = await WalletService.rechargeWallet(
-      fromUserId,
-      validatedData.toUserId,
-      validatedData.amountPaise,
-      validatedData.details
-    );
     
     res.json({
       success: true,

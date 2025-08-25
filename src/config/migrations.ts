@@ -66,6 +66,7 @@ export async function runMigrations() {
         authentication_paise INTEGER NOT NULL DEFAULT 0,
         service_paise INTEGER NOT NULL DEFAULT 0,
         is_default BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by INTEGER REFERENCES users_whatsapp(id),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(name)
@@ -253,6 +254,12 @@ export async function runMigrations() {
         console.warn('Could not add unique constraint to price_plans.name:', error.message);
       }
     }
+
+    // Safe column add: created_by for aggregator-owned plans
+    await pool.query(`
+      ALTER TABLE price_plans
+      ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users_whatsapp(id);
+    `);
 
     try {
       await pool.query(`

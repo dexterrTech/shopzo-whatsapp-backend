@@ -290,6 +290,7 @@ export class WalletService {
   // Get user relationships (aggregator -> businesses)
   static async getUserRelationships(userId: number, relationshipType?: string): Promise<UserRelationship[]> {
     try {
+      // Primary: new relationship table
       let query = 'SELECT * FROM user_relationships WHERE parent_user_id = $1';
       const params: (number | string)[] = [userId];
 
@@ -301,7 +302,29 @@ export class WalletService {
       query += ' ORDER BY created_at DESC';
 
       const result = await pool.query(query, params);
-      return result.rows;
+
+      if (result.rows.length > 0) {
+        return result.rows as UserRelationship[];
+      }
+
+      // Fallback: legacy mapping in user_children (parent_user_id -> child_user_id)
+      // This keeps existing installations working without migrating data.
+      const legacy = await pool.query(
+        `SELECT 
+           uc.child_user_id AS id,
+           uc.parent_user_id,
+           uc.child_user_id,
+           'business'::text AS relationship_type,
+           'active'::text AS status,
+           NOW() AS created_at,
+           NOW() AS updated_at
+         FROM user_children uc
+         WHERE uc.parent_user_id = $1
+         ORDER BY uc.child_user_id DESC`,
+        [userId]
+      );
+
+      return legacy.rows as UserRelationship[];
     } catch (error) {
       console.error('Error getting user relationships:', error);
       throw new Error('Failed to get user relationships');
@@ -376,6 +399,55 @@ export class WalletService {
     } catch (error) {
       console.error('Error updating system wallet balance:', error);
       throw new Error('Failed to update system wallet balance');
+    }
+  }
+
+  // Recharge user wallet from system wallet (Super Admin only)
+  static async rechargeFromSystemWallet(
+    toUserId: number,
+    amountPaise: number,
+    details?: string
+  ): Promise<WalletTransaction> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Get or create wallet account for the user
+      const toAccount = await this.getOrCreateWalletAccount(toUserId);
+
+      // Check if system wallet has sufficient balance
+      const systemBalance = await this.getSystemWalletBalance();
+      if (systemBalance < amountPaise) {
+        throw new Error('Insufficient system wallet balance');
+      }
+
+      // Deduct from system wallet
+      await this.updateSystemWalletBalance(amountPaise, 'subtract');
+
+      // Add to user account
+      const newToBalance = toAccount.balance_paise + amountPaise;
+      await client.query(
+        'UPDATE wallet_accounts SET balance_paise = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2',
+        [newToBalance, toUserId]
+      );
+
+      // Create transaction record
+      const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const result = await client.query(
+        `INSERT INTO wallet_transactions 
+         (user_id, transaction_id, type, amount_paise, currency, details, from_label, to_label, balance_after_paise) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [toUserId, transactionId, 'RECHARGE', amountPaise, 'INR', details || 'System wallet recharge', 'System Wallet', 'Wallet', newToBalance]
+      );
+
+      await client.query('COMMIT');
+      return result.rows[0];
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error recharging from system wallet:', error);
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }
