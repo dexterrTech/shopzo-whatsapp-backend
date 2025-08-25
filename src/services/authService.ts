@@ -12,6 +12,7 @@ export interface User {
   is_active: boolean;
   created_at: Date;
   last_login_at?: Date;
+  aggregator_name?: string;
 }
 
 export interface RegisterUserData {
@@ -140,15 +141,11 @@ export class AuthService {
   /**
    * Move a business user to another aggregator (super admin only)
    */
-  static async moveBusinessToAggregator(childUserId: number, newAggregatorUserId: number): Promise<void> {
+  static async moveBusinessToAggregator(childUserId: number, newAggregatorUserId: number | null): Promise<void> {
     // Validate roles
     const child = await pool.query('SELECT id, role FROM users_whatsapp WHERE id = $1', [childUserId]);
     if (child.rows.length === 0 || child.rows[0].role !== 'user') {
       throw new Error('Invalid business user');
-    }
-    const agg = await pool.query('SELECT id, role FROM users_whatsapp WHERE id = $1', [newAggregatorUserId]);
-    if (agg.rows.length === 0 || agg.rows[0].role !== 'aggregator') {
-      throw new Error('Invalid aggregator');
     }
 
     const client = await pool.connect();
@@ -156,8 +153,18 @@ export class AuthService {
       await client.query('BEGIN');
       // Remove any existing parent
       await client.query('DELETE FROM user_children WHERE child_user_id = $1', [childUserId]);
-      // Add new mapping
-      await client.query('INSERT INTO user_children (parent_user_id, child_user_id) VALUES ($1, $2)', [newAggregatorUserId, childUserId]);
+      
+      // If newAggregatorUserId is provided, add new mapping
+      if (newAggregatorUserId && newAggregatorUserId > 0) {
+        const agg = await pool.query('SELECT id, role FROM users_whatsapp WHERE id = $1', [newAggregatorUserId]);
+        if (agg.rows.length === 0 || agg.rows[0].role !== 'aggregator') {
+          throw new Error('Invalid aggregator');
+        }
+        // Add new mapping
+        await client.query('INSERT INTO user_children (parent_user_id, child_user_id) VALUES ($1, $2)', [newAggregatorUserId, childUserId]);
+      }
+      // If newAggregatorUserId is 0 or null, just remove the relationship (unassign)
+      
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
@@ -165,6 +172,20 @@ export class AuthService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Unassign a business user from any aggregator (super admin only)
+   */
+  static async unassignBusinessFromAggregator(childUserId: number): Promise<void> {
+    // Validate that the user is a business
+    const child = await pool.query('SELECT id, role FROM users_whatsapp WHERE id = $1', [childUserId]);
+    if (child.rows.length === 0 || child.rows[0].role !== 'user') {
+      throw new Error('Invalid business user');
+    }
+
+    // Remove the relationship
+    await pool.query('DELETE FROM user_children WHERE child_user_id = $1', [childUserId]);
   }
 
   /**
@@ -187,7 +208,7 @@ export class AuthService {
    */
   static async setUserPassword(userId: number, newPassword: string): Promise<void> {
     const passwordHash = await bcrypt.hash(newPassword, this.SALT_ROUNDS);
-    await pool.query('UPDATE users_whatsapp SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [passwordHash, userId]);
+    await pool.query('UPDATE users_whatsapp SET password_hash = $1 WHERE id = $2', [passwordHash, userId]);
   }
 
   /**
@@ -283,7 +304,23 @@ export class AuthService {
    */
   static async getAllUsers(): Promise<User[]> {
     const result = await pool.query(
-      'SELECT id, name, email, role, is_approved, is_active, created_at, last_login_at FROM users_whatsapp ORDER BY created_at DESC'
+      `SELECT
+        u.id,
+        u.name,
+        u.email,
+        u.role,
+        u.is_approved,
+        u.is_active,
+        u.created_at,
+        u.last_login_at,
+        CASE
+          WHEN u.role = 'user' THEN agg.name
+          ELSE NULL
+        END as aggregator_name
+       FROM users_whatsapp u
+       LEFT JOIN user_children uc ON u.id = uc.child_user_id
+       LEFT JOIN users_whatsapp agg ON uc.parent_user_id = agg.id
+       ORDER BY u.created_at DESC`
     );
 
     return result.rows;
@@ -325,7 +362,7 @@ export class AuthService {
   static async updateUserRole(userId: number, role: 'user' | 'aggregator' | 'super_admin'): Promise<User> {
     const result = await pool.query(
       `UPDATE users_whatsapp 
-       SET role = $1, updated_at = CURRENT_TIMESTAMP 
+       SET role = $1 
        WHERE id = $2 
        RETURNING id, name, email, role, is_approved, is_active, created_at, last_login_at`,
       [role, userId]
@@ -344,8 +381,8 @@ export class AuthService {
   static async deactivateUser(userId: number): Promise<User> {
     const result = await pool.query(
       `UPDATE users_whatsapp 
-       SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $2 
+       SET is_active = FALSE 
+       WHERE id = $1 
        RETURNING id, name, email, role, is_approved, is_active, created_at, last_login_at`,
       [userId]
     );
@@ -363,7 +400,7 @@ export class AuthService {
   static async activateUser(userId: number): Promise<User> {
     const result = await pool.query(
       `UPDATE users_whatsapp 
-       SET is_active = TRUE, updated_at = CURRENT_TIMESTAMP 
+       SET is_active = TRUE 
        WHERE id = $1 
        RETURNING id, name, email, role, is_approved, is_active, created_at, last_login_at`,
       [userId]

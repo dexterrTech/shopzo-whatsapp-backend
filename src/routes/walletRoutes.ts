@@ -1,284 +1,118 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { authenticateToken, requireSuperAdmin } from '../middleware/authMiddleware';
+import { WalletService } from '../services/walletService';
+import { authenticateToken, requireAdmin, requireSuperAdmin, requireAggregator } from '../middleware/authMiddleware';
 import { pool } from '../config/database';
 
 const router = Router();
 
+// Validation schemas
+const rechargeSchema = z.object({
+  toUserId: z.number().int().positive(),
+  amountPaise: z.number().int().positive(),
+  details: z.string().optional()
+});
+
+const transactionQuerySchema = z.object({
+  limit: z.string().transform(val => parseInt(val)).pipe(z.number().int().positive().max(100)).default(50),
+  offset: z.string().transform(val => parseInt(val)).pipe(z.number().int().min(0)).default(0)
+});
+
 /**
  * @swagger
- * tags:
- *   name: Wallet
- *   description: Wallet balances and transactions
- */
-
-// Ensure a wallet account exists for the user
-async function ensureWallet(userId: number) {
-  await pool.query(
-    `INSERT INTO wallet_accounts (user_id)
-     VALUES ($1)
-     ON CONFLICT (user_id) DO NOTHING`,
-    [userId]
-  );
-}
-
-// Get my wallet balance and recent transactions
-/**
- * @swagger
- * /api/wallet/me:
+ * /api/wallet/balance:
  *   get:
- *     summary: Get current user's wallet summary
+ *     summary: Get user wallet balance
  *     tags: [Wallet]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Wallet summary
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 data:
- *                   type: object
- *                   properties:
- *                     balance_paise:
- *                       type: integer
- *                       example: 2360915
- *                     currency:
- *                       type: string
- *                       example: INR
- *                     transactions:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           id: { type: integer }
- *                           transaction_id: { type: string }
- *                           type: { type: string, enum: [RECHARGE, DEBIT, REFUND, ADJUSTMENT] }
- *                           status: { type: string, enum: [completed, pending, failed] }
- *                           amount_paise: { type: integer }
- *                           currency: { type: string }
- *                           details: { type: string }
- *                           balance_after_paise: { type: integer }
- *                           created_at: { type: string, format: date-time }
+ *         description: Wallet balance retrieved successfully
+ *       401:
+ *         description: Unauthorized
  */
-router.get('/me', authenticateToken, async (req, res, next) => {
+router.get('/balance', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user?.userId!;
-    await ensureWallet(userId);
-
-    const balanceRes = await pool.query(
-      'SELECT balance_paise, currency FROM wallet_accounts WHERE user_id = $1',
-      [userId]
-    );
-
-    const txRes = await pool.query(
-      `SELECT id, transaction_id, type, status, amount_paise, currency, details, from_label, to_label, balance_after_paise, created_at
-       FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
-      [userId]
-    );
-
+    const userId = req.user!.userId;
+    const account = await WalletService.getOrCreateWalletAccount(userId);
+    
     res.json({
+      success: true,
       data: {
-        balance_paise: balanceRes.rows[0]?.balance_paise ?? 0,
-        currency: balanceRes.rows[0]?.currency ?? 'INR',
-        transactions: txRes.rows,
-      },
+        balance: account.balance_paise / 100, // Convert paise to rupees
+        balance_paise: account.balance_paise,
+        suspense_balance: (account.suspense_balance_paise || 0) / 100,
+        suspense_balance_paise: account.suspense_balance_paise || 0,
+        currency: account.currency
+      }
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    console.error('Error getting wallet balance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get wallet balance'
+    });
   }
 });
 
-// Get paginated wallet logs for current user
 /**
  * @swagger
- * /api/wallet/logs:
+ * /api/wallet/transactions:
  *   get:
- *     summary: Get paginated wallet transactions for current user
+ *     summary: Get user wallet transactions
  *     tags: [Wallet]
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: page
- *         schema: { type: integer, default: 1 }
  *       - in: query
  *         name: limit
- *         schema: { type: integer, default: 20 }
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *         description: Number of transactions to return
  *       - in: query
- *         name: type
- *         schema: { type: string, enum: [RECHARGE, DEBIT, REFUND, ADJUSTMENT] }
- *       - in: query
- *         name: status
- *         schema: { type: string, enum: [completed, pending, failed] }
- *       - in: query
- *         name: start_date
- *         schema: { type: string, format: date-time }
- *       - in: query
- *         name: end_date
- *         schema: { type: string, format: date-time }
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *         description: Number of transactions to skip
  *     responses:
  *       200:
- *         description: Paginated wallet logs
+ *         description: Transactions retrieved successfully
+ *       401:
+ *         description: Unauthorized
  */
-router.get('/logs', authenticateToken, async (req, res, next) => {
+router.get('/transactions', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user?.userId!;
-    await ensureWallet(userId);
-
-    const query = z
-      .object({
-        page: z.coerce.number().int().positive().default(1),
-        limit: z.coerce.number().int().positive().max(100).default(20),
-        type: z.enum(['RECHARGE', 'DEBIT', 'REFUND', 'ADJUSTMENT']).optional(),
-        status: z.enum(['completed', 'pending', 'failed']).optional(),
-        start_date: z.string().optional(),
-        end_date: z.string().optional(),
-      })
-      .parse(req.query);
-
-    let where = 'WHERE user_id = $1';
-    const params: any[] = [userId];
-    let idx = 2;
-
-    if (query.type) { where += ` AND type = $${idx++}`; params.push(query.type); }
-    if (query.status) { where += ` AND status = $${idx++}`; params.push(query.status); }
-    if (query.start_date) { where += ` AND created_at >= $${idx++}`; params.push(query.start_date); }
-    if (query.end_date) { where += ` AND created_at <= $${idx++}`; params.push(query.end_date); }
-
-    const countRes = await pool.query(`SELECT COUNT(*) FROM wallet_transactions ${where}`, params);
-    const total = parseInt(countRes.rows[0].count);
-    const offset = (query.page - 1) * query.limit;
-
-    const logsRes = await pool.query(
-      `SELECT id, transaction_id, type, status, amount_paise, currency, details, from_label, to_label, balance_after_paise, created_at
-       FROM wallet_transactions
-       ${where}
-       ORDER BY created_at DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      [...params, query.limit, offset]
-    );
-
+    const userId = req.user!.userId;
+    const { limit, offset } = transactionQuerySchema.parse(req.query);
+    
+    const transactions = await WalletService.getWalletTransactions(userId, limit, offset);
+    
     res.json({
-      data: {
-        logs: logsRes.rows,
-        pagination: { page: query.page, limit: query.limit, total, pages: Math.ceil(total / query.limit) },
-      },
+      success: true,
+      data: transactions.map(tx => ({
+        ...tx,
+        amount: tx.amount_paise / 100, // Convert paise to rupees
+        balance_after: tx.balance_after_paise ? tx.balance_after_paise / 100 : undefined,
+        suspense_balance_after: tx.suspense_balance_after_paise ? tx.suspense_balance_after_paise / 100 : undefined
+      }))
     });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Super admin: list balances for all users (and aggregators), with optional user filter
-/**
- * @swagger
- * /api/wallet/balances:
- *   get:
- *     summary: Get wallet balances for all users (super admin only)
- *     tags: [Wallet]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: user_id
- *         schema: { type: integer }
- *         required: false
- *     responses:
- *       200:
- *         description: List of balances
- */
-router.get('/balances', authenticateToken, requireSuperAdmin, async (req, res, next) => {
-  try {
-    const query = z
-      .object({ user_id: z.coerce.number().int().positive().optional() })
-      .parse(req.query);
-
-    const rows = await pool.query(
-      `SELECT u.id as user_id, u.name, u.email, u.role, COALESCE(w.balance_paise, 0) AS balance_paise, COALESCE(w.currency, 'INR') as currency
-       FROM users_whatsapp u
-       LEFT JOIN wallet_accounts w ON w.user_id = u.id
-       ${query.user_id ? 'WHERE u.id = $1' : ''}
-       ORDER BY u.id ASC`,
-      query.user_id ? [query.user_id] : []
-    );
-
-    res.json({ data: rows.rows });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Super admin: credit/debit a wallet (manual adjustment)
-/**
- * @swagger
- * /api/wallet/adjust:
- *   post:
- *     summary: Adjust a user's wallet balance (credit or debit)
- *     tags: [Wallet]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [user_id, amount_paise]
- *             properties:
- *               user_id: { type: integer }
- *               amount_paise: { type: integer, description: Positive for credit, negative for debit }
- *               currency: { type: string, example: INR }
- *               details: { type: string }
- *     responses:
- *       200: { description: Adjustment applied }
- *       400: { description: Insufficient balance or invalid input }
- */
-router.post('/adjust', authenticateToken, requireSuperAdmin, async (req, res, next) => {
-  const body = z
-    .object({
-      user_id: z.coerce.number().int().positive(),
-      amount_paise: z.coerce.number().int(), // positive credit, negative debit
-      currency: z.string().default('INR'),
-      details: z.string().optional(),
-    })
-    .parse(req.body);
-  try {
-    await ensureWallet(body.user_id);
-    await pool.query('BEGIN');
-
-    const balRes = await pool.query('SELECT balance_paise FROM wallet_accounts WHERE user_id = $1 FOR UPDATE', [body.user_id]);
-    const current = balRes.rows[0]?.balance_paise ?? 0;
-    const nextBal = current + body.amount_paise;
-    if (nextBal < 0) {
-      await pool.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: 'Insufficient balance' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid query parameters',
+        errors: error.issues
+      });
     }
-
-    await pool.query('UPDATE wallet_accounts SET balance_paise = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2', [nextBal, body.user_id]);
-    const txId = `WL${Date.now().toString(36)}${Math.random().toString(36).slice(2,6)}`;
-    await pool.query(
-      `INSERT INTO wallet_transactions (user_id, transaction_id, type, status, amount_paise, currency, details, balance_after_paise)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        body.user_id,
-        txId,
-        body.amount_paise >= 0 ? 'ADJUSTMENT' : 'ADJUSTMENT',
-        'completed',
-        Math.abs(body.amount_paise),
-        body.currency,
-        body.details ?? (body.amount_paise >= 0 ? 'Credit' : 'Debit'),
-        nextBal,
-      ]
-    );
-
-    await pool.query('COMMIT');
-    res.json({ success: true, data: { user_id: body.user_id, balance_paise: nextBal } });
-  } catch (err) {
-    await pool.query('ROLLBACK');
-    next(err);
+    
+    console.error('Error getting wallet transactions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get wallet transactions'
+    });
   }
 });
 
@@ -286,7 +120,7 @@ router.post('/adjust', authenticateToken, requireSuperAdmin, async (req, res, ne
  * @swagger
  * /api/wallet/recharge:
  *   post:
- *     summary: Recharge wallet balance for current user (mocked payment)
+ *     summary: Recharge user wallet (Super Admin or Aggregator only)
  *     tags: [Wallet]
  *     security:
  *       - bearerAuth: []
@@ -296,35 +130,245 @@ router.post('/adjust', authenticateToken, requireSuperAdmin, async (req, res, ne
  *         application/json:
  *           schema:
  *             type: object
- *             required: [amount_paise]
+ *             required:
+ *               - toUserId
+ *               - amountPaise
  *             properties:
- *               amount_paise: { type: integer }
- *               currency: { type: string, example: INR }
- *               reference: { type: string }
+ *               toUserId:
+ *                 type: integer
+ *               amountPaise:
+ *                 type: integer
+ *               details:
+ *                 type: string
  *     responses:
- *       200: { description: Recharged }
+ *       200:
+ *         description: Wallet recharged successfully
+ *       400:
+ *         description: Validation error or insufficient balance
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - insufficient permissions
  */
-router.post('/recharge', authenticateToken, async (req, res, next) => {
+router.post('/recharge', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const userId = req.user?.userId!;
-    const body = z.object({ amount_paise: z.coerce.number().int().positive(), currency: z.string().default('INR'), reference: z.string().optional() }).parse(req.body);
-    await ensureWallet(userId);
-    await pool.query('BEGIN');
-    const balRes = await pool.query('SELECT balance_paise FROM wallet_accounts WHERE user_id = $1 FOR UPDATE', [userId]);
-    const current = balRes.rows[0]?.balance_paise ?? 0;
-    const nextBal = current + body.amount_paise;
-    await pool.query('UPDATE wallet_accounts SET balance_paise = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2', [nextBal, userId]);
-    const txId = `RC-${Date.now().toString(36)}`;
-    const insTx = await pool.query(
-      `INSERT INTO wallet_transactions (user_id, transaction_id, type, status, amount_paise, currency, details, balance_after_paise)
-       VALUES ($1,$2,'RECHARGE','completed',$3,$4,$5,$6) RETURNING id`,
-      [userId, txId, body.amount_paise, body.currency, body.reference || 'Wallet recharge', nextBal]
+    const fromUserId = req.user!.userId;
+    const validatedData = rechargeSchema.parse(req.body);
+    
+    let transaction;
+    
+    // Check if user is Super Admin or if they're recharging their own businesses
+    if (req.user!.role === 'super_admin') {
+      // Super Admin recharges from system wallet
+      transaction = await WalletService.rechargeFromSystemWallet(
+        validatedData.toUserId,
+        validatedData.amountPaise,
+        validatedData.details
+      );
+    } else {
+      // For aggregators, check if they're recharging their own businesses
+      const relationships = await WalletService.getUserRelationships(fromUserId, 'business');
+      const hasBusiness = relationships.some(rel => rel.child_user_id === validatedData.toUserId);
+      
+      if (!hasBusiness) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only recharge wallets of your own businesses'
+        });
+      }
+      
+      transaction = await WalletService.rechargeWallet(
+        fromUserId,
+        validatedData.toUserId,
+        validatedData.amountPaise,
+        validatedData.details
+      );
+    }
+    
+    res.json({
+      success: true,
+      message: 'Wallet recharged successfully',
+      data: {
+        ...transaction,
+        amount: transaction.amount_paise / 100
+      }
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: error.issues
+      });
+    }
+    
+    if (error instanceof Error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+    
+    console.error('Error recharging wallet:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to recharge wallet'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/wallet/system-balance:
+ *   get:
+ *     summary: Get system wallet balance (Super Admin only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: System wallet balance retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - insufficient permissions
+ */
+router.get('/system-balance', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const balance = await WalletService.getSystemWalletBalance();
+    
+    res.json({
+      success: true,
+      data: {
+        balance: balance / 100, // Convert paise to rupees
+        balance_paise: balance,
+        currency: 'INR'
+      }
+    });
+  } catch (error) {
+    console.error('Error getting system wallet balance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get system wallet balance'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/wallet/businesses:
+ *   get:
+ *     summary: Get businesses under aggregator with wallet balances
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Businesses retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - insufficient permissions
+ */
+router.get('/businesses', authenticateToken, requireAggregator, async (req, res) => {
+  try {
+    const aggregatorId = req.user!.userId;
+    const relationships = await WalletService.getUserRelationships(aggregatorId, 'business');
+    
+    // Get wallet balances for all businesses
+    const businessesWithBalances = await Promise.all(
+      relationships.map(async (rel) => {
+        const account = await WalletService.getWalletAccount(rel.child_user_id);
+        return {
+          relationshipId: rel.id,
+          businessId: rel.child_user_id,
+          status: rel.status,
+          createdAt: rel.created_at,
+          walletBalance: account ? account.balance_paise / 100 : 0,
+          walletBalancePaise: account ? account.balance_paise : 0
+        };
+      })
     );
-    await pool.query('COMMIT');
-    res.json({ success: true, data: { wallet_tx_id: insTx.rows[0].id, balance_paise: nextBal } });
-  } catch (err) {
-    await pool.query('ROLLBACK');
-    next(err);
+    
+    res.json({
+      success: true,
+      data: businessesWithBalances
+    });
+  } catch (error) {
+    console.error('Error getting businesses with balances:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get businesses with balances'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/wallet/all-users:
+ *   get:
+ *     summary: Get all users with wallet balances (Super Admin only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Users with wallet balances retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - insufficient permissions
+ */
+router.get('/all-users', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    // Check if suspense_balance_paise column exists
+    const columnCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'wallet_accounts' 
+      AND column_name = 'suspense_balance_paise'
+    `);
+    
+    const hasSuspenseColumn = columnCheck.rows.length > 0;
+    
+    // Build query based on available columns
+    let query = `
+      SELECT 
+        wa.user_id,
+        wa.balance_paise,
+        wa.currency,
+        wa.updated_at
+    `;
+    
+    if (hasSuspenseColumn) {
+      query += `, wa.suspense_balance_paise`;
+    }
+    
+    query += `
+      FROM wallet_accounts wa
+      ORDER BY wa.updated_at DESC
+    `;
+    
+    const result = await pool.query(query);
+    
+    const usersWithBalances = result.rows.map(row => ({
+      userId: row.user_id,
+      balance_paise: row.balance_paise || 0,
+      suspense_balance_paise: hasSuspenseColumn ? (row.suspense_balance_paise || 0) : 0,
+      currency: row.currency || 'INR',
+      lastUpdated: row.updated_at || new Date().toISOString()
+    }));
+    
+    res.json({
+      success: true,
+      data: usersWithBalances
+    });
+  } catch (error) {
+    console.error('Error getting all users with balances:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get users with balances'
+    });
   }
 });
 

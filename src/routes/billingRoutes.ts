@@ -138,7 +138,7 @@ router.get('/plans', authenticateToken, requireSuperAdmin, async (_req, res, nex
  *     responses:
  *       201: { description: Created }
  */
-router.post('/plans', authenticateToken, requireSuperAdmin, async (req, res, next) => {
+router.post('/plans', authenticateToken, async (req, res, next) => {
   try {
     const body = z.object({
       name: z.string().min(1),
@@ -162,6 +162,63 @@ router.post('/plans', authenticateToken, requireSuperAdmin, async (req, res, nex
         .default(0),
       is_default: z.boolean().default(false),
     }).parse(req.body);
+    
+    if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+    const requester = req.user;
+
+    // Aggregators can create non-default plans only, with floor at their assigned base plan
+    if (requester.role === 'aggregator') {
+      // Force non-default
+      const payload = { ...body, is_default: false };
+
+      // Fetch aggregator's assigned base plan
+      const basePlanRes = await pool.query(
+        `SELECT pp.*
+         FROM user_price_plans upp
+         JOIN price_plans pp ON pp.id = upp.price_plan_id
+         WHERE upp.user_id = $1
+         ORDER BY upp.effective_from DESC
+         LIMIT 1`,
+        [requester.userId]
+      );
+
+      const base = basePlanRes.rows[0];
+      if (!base) {
+        return res.status(400).json({ success: false, message: 'No base plan assigned to your account' });
+      }
+
+      // Enforce floor pricing
+      if (
+        payload.utility_paise < base.utility_paise ||
+        payload.marketing_paise < base.marketing_paise ||
+        payload.authentication_paise < base.authentication_paise ||
+        payload.service_paise < base.service_paise
+      ) {
+        return res.status(400).json({ success: false, message: 'Prices cannot be below your base plan minimums' });
+      }
+
+      const result = await pool.query(
+        `INSERT INTO price_plans (name, currency, utility_paise, marketing_paise, authentication_paise, service_paise, is_default, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING *`,
+        [
+          payload.name,
+          payload.currency,
+          payload.utility_paise,
+          payload.marketing_paise,
+          payload.authentication_paise,
+          payload.service_paise,
+          false,
+          requester.userId,
+        ]
+      );
+      return res.status(201).json({ data: result.rows[0] });
+    }
+
+    // Only super_admin can create (and optionally set default)
+    if (requester.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
 
     if (body.is_default) {
       await pool.query('UPDATE price_plans SET is_default = FALSE WHERE is_default = TRUE');
@@ -181,7 +238,7 @@ router.post('/plans', authenticateToken, requireSuperAdmin, async (req, res, nex
         body.is_default,
       ]
     );
-    res.status(201).json({ data: result.rows[0] });
+    return res.status(201).json({ data: result.rows[0] });
   } catch (err) {
     next(err);
   }
@@ -324,13 +381,30 @@ router.post('/plans/:id/default', authenticateToken, requireSuperAdmin, async (r
  *     responses:
  *       200: { description: Plan assignment created }
  */
-router.post('/users/:userId/plan', authenticateToken, requireSuperAdmin, async (req, res, next) => {
+router.post('/users/:userId/plan', authenticateToken, async (req, res, next) => {
   try {
     const { userId } = z.object({ userId: z.coerce.number().int().positive() }).parse(req.params);
     const body = z.object({
       price_plan_id: z.coerce.number().int().positive(),
       effective_from: z.string().optional(),
     }).parse(req.body);
+
+    // Authorization: super_admin, or aggregator managing this user
+    const requester = req.user!;
+    let isAllowed = false;
+    if (requester.role === 'super_admin') {
+      isAllowed = true;
+    } else if (requester.role === 'aggregator') {
+      const managed = await pool.query(
+        'SELECT 1 FROM user_children WHERE parent_user_id = $1 AND child_user_id = $2 LIMIT 1',
+        [requester.userId, userId]
+      );
+      const managedCount = managed?.rowCount ?? 0;
+      isAllowed = managedCount > 0;
+    }
+    if (!isAllowed) {
+      return res.status(403).json({ success: false, message: 'Insufficient permissions' });
+    }
 
     // ensure plan exists
     const planRes = await pool.query('SELECT id FROM price_plans WHERE id = $1', [body.price_plan_id]);
@@ -352,11 +426,30 @@ router.post('/users/:userId/plan', authenticateToken, requireSuperAdmin, async (
   }
 });
 
+// Aggregator: list my created plans (non-default)
+router.get('/my-plans', authenticateToken, async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+    if (!['aggregator', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const ownerId = req.user.role === 'super_admin' ? req.user.userId : req.user.userId;
+    const plans = await pool.query(
+      'SELECT * FROM price_plans WHERE created_by = $1 ORDER BY id ASC',
+      [ownerId]
+    );
+    res.json({ data: plans.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /**
  * @swagger
  * /api/billing/users/{userId}/plan:
  *   get:
- *     summary: Get current price plan for a user (super admin)
+ *     summary: Get current price plan for a user
+ *     description: Super admin can fetch any user's plan. A user can fetch their own plan. Aggregators can fetch plans for their managed users.
  *     tags: [Billing]
  *     security:
  *       - bearerAuth: []
@@ -367,10 +460,37 @@ router.post('/users/:userId/plan', authenticateToken, requireSuperAdmin, async (
  *         schema: { type: integer }
  *     responses:
  *       200: { description: Current plan returned }
+ *       403: { description: Insufficient permissions }
  */
-router.get('/users/:userId/plan', authenticateToken, requireSuperAdmin, async (req, res, next) => {
+router.get('/users/:userId/plan', authenticateToken, async (req, res, next) => {
   try {
     const { userId } = z.object({ userId: z.coerce.number().int().positive() }).parse(req.params);
+
+    // Authorization: allow if requester is super_admin, the same user, or an aggregator managing the user
+    const requester = req.user!;
+    let isAllowed = false;
+
+    if (requester.role === 'super_admin') {
+      isAllowed = true;
+    } else if (requester.userId === userId) {
+      isAllowed = true;
+    } else if (requester.role === 'aggregator') {
+      try {
+        const managed = await pool.query(
+          'SELECT 1 FROM user_children WHERE parent_user_id = $1 AND child_user_id = $2 LIMIT 1',
+          [requester.userId, userId]
+        );
+        const managedCount = managed?.rowCount ?? 0;
+        isAllowed = managedCount > 0;
+      } catch (e) {
+        return res.status(500).json({ success: false, message: 'Database error while checking permissions' });
+      }
+    }
+
+    if (!isAllowed) {
+      return res.status(403).json({ success: false, message: 'Insufficient permissions' });
+    }
+
     const result = await pool.query(
       `SELECT pp.*
        FROM user_price_plans upp

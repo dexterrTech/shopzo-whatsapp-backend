@@ -66,8 +66,10 @@ export async function runMigrations() {
         authentication_paise INTEGER NOT NULL DEFAULT 0,
         service_paise INTEGER NOT NULL DEFAULT 0,
         is_default BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by INTEGER REFERENCES users_whatsapp(id),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(name)
       );
     `);
 
@@ -121,6 +123,7 @@ export async function runMigrations() {
         user_id INTEGER NOT NULL UNIQUE REFERENCES users_whatsapp(id) ON DELETE CASCADE,
         currency VARCHAR(10) NOT NULL DEFAULT 'INR',
         balance_paise INTEGER NOT NULL DEFAULT 0,
+        suspense_balance_paise INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -135,7 +138,7 @@ export async function runMigrations() {
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
         transaction_id VARCHAR(64) UNIQUE NOT NULL,
-        type VARCHAR(20) NOT NULL CHECK (type IN ('RECHARGE','DEBIT','REFUND','ADJUSTMENT')),
+        type VARCHAR(20) NOT NULL CHECK (type IN ('RECHARGE','DEBIT','REFUND','ADJUSTMENT','SUSPENSE_DEBIT','SUSPENSE_REFUND')),
         status VARCHAR(20) NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','pending','failed')),
         amount_paise INTEGER NOT NULL,
         currency VARCHAR(10) NOT NULL DEFAULT 'INR',
@@ -143,6 +146,7 @@ export async function runMigrations() {
         from_label VARCHAR(100),
         to_label VARCHAR(100),
         balance_after_paise INTEGER,
+        suspense_balance_after_paise INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -186,18 +190,23 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_waba_sources_waba ON waba_sources(waba_id);
     `);
 
-    // Aggregator/tenant mapping
+    // Aggregator/tenant mapping - updated structure
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_children (
+      CREATE TABLE IF NOT EXISTS user_relationships (
+        id SERIAL PRIMARY KEY,
         parent_user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
         child_user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        relationship_type VARCHAR(20) NOT NULL DEFAULT 'business' CHECK (relationship_type IN ('business', 'aggregator')),
+        status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'pending')),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (parent_user_id, child_user_id)
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(parent_user_id, child_user_id)
       );
     `);
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_user_children_parent ON user_children(parent_user_id);
-      CREATE INDEX IF NOT EXISTS idx_user_children_child ON user_children(child_user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_relationships_parent ON user_relationships(parent_user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_relationships_child ON user_relationships(child_user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_relationships_type ON user_relationships(relationship_type);
     `);
 
     // Country/category overrides per plan
@@ -215,6 +224,66 @@ export async function runMigrations() {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_plan_overrides_plan ON price_plan_overrides(price_plan_id);
       CREATE INDEX IF NOT EXISTS idx_plan_overrides_country ON price_plan_overrides(country_code);
+    `);
+
+    // Super Admin wallet configuration
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS system_wallet (
+        id SERIAL PRIMARY KEY,
+        wallet_type VARCHAR(20) NOT NULL DEFAULT 'main' CHECK (wallet_type IN ('main', 'reserve')),
+        currency VARCHAR(10) NOT NULL DEFAULT 'INR',
+        balance_paise INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(wallet_type)
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_system_wallet_type ON system_wallet(wallet_type);
+    `);
+
+    // Add unique constraints if they don't exist
+    try {
+      await pool.query(`
+        ALTER TABLE price_plans 
+        ADD CONSTRAINT uq_price_plans_name UNIQUE (name);
+      `);
+    } catch (error: any) {
+      if (error.code !== '42710') { // 42710 = duplicate_object
+        console.warn('Could not add unique constraint to price_plans.name:', error.message);
+      }
+    }
+
+    // Safe column add: created_by for aggregator-owned plans
+    await pool.query(`
+      ALTER TABLE price_plans
+      ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users_whatsapp(id);
+    `);
+
+    try {
+      await pool.query(`
+        ALTER TABLE system_wallet 
+        ADD CONSTRAINT uq_system_wallet_type UNIQUE (wallet_type);
+      `);
+    } catch (error: any) {
+      if (error.code !== '42710') { // 42710 = duplicate_object
+        console.warn('Could not add unique constraint to system_wallet.wallet_type:', error.message);
+      }
+    }
+
+    // Insert default system wallet if not exists
+    await pool.query(`
+      INSERT INTO system_wallet (wallet_type, balance_paise) 
+      VALUES ('main', 10000000) 
+      ON CONFLICT (wallet_type) DO NOTHING;
+    `);
+
+    // Insert default price plan if not exists
+    await pool.query(`
+      INSERT INTO price_plans (name, utility_paise, marketing_paise, authentication_paise, service_paise, is_default) 
+      VALUES ('Default', 100, 150, 80, 120, true) 
+      ON CONFLICT (name) DO NOTHING;
     `);
 
     console.log('Migrations completed successfully');

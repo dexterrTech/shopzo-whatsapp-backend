@@ -455,10 +455,13 @@ router.get('/aggregator/businesses', authenticateToken, requireAggregator, async
  * Super Admin: Move business to another aggregator
  */
 router.post('/move-business', authenticateToken, requireSuperAdmin, async (req, res) => {
-  const schema = z.object({ child_user_id: z.number().int().positive(), new_aggregator_user_id: z.number().int().positive() });
+  const schema = z.object({ 
+    child_user_id: z.number().int().positive(), 
+    new_aggregator_user_id: z.number().int().min(0) // Allow 0 for unassigning
+  });
   try {
     const { child_user_id, new_aggregator_user_id } = schema.parse(req.body);
-    await AuthService.moveBusinessToAggregator(child_user_id, new_aggregator_user_id);
+    await AuthService.moveBusinessToAggregator(child_user_id, new_aggregator_user_id === 0 ? null : new_aggregator_user_id);
     res.json({ success: true, message: 'Business moved successfully' });
   } catch (error) {
     if (error instanceof z.ZodError) {
