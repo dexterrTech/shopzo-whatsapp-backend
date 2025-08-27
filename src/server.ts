@@ -46,6 +46,20 @@ app.use((req, res, next) => {
   next();
 });
 
+// Additional CORS protection - set headers on every response
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    // Ensure CORS headers are set even after response is sent
+    if (!res.getHeader('Access-Control-Allow-Origin')) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://message.shopzo.app');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-access-token, x-waba-id, Origin, Accept');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+  });
+  next();
+});
+
 // CORS middleware as backup (but manual headers should handle it first)
 app.use(cors({
   origin: 'https://message.shopzo.app',
@@ -63,6 +77,20 @@ app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString() });
+});
+
+// Test CORS route
+app.get("/api/cors-test", (_req, res) => {
+  console.log('🧪 CORS test route hit');
+  res.json({ 
+    message: "CORS is working!", 
+    corsHeaders: {
+      origin: res.getHeader('Access-Control-Allow-Origin'),
+      methods: res.getHeader('Access-Control-Allow-Methods'),
+      credentials: res.getHeader('Access-Control-Allow-Credentials')
+    },
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Test route to verify API is working
@@ -97,6 +125,7 @@ app.use((req, res, next) => {
   const allowlist: RegExp[] = [
     /^\/health$/,
     /^\/api\/test$/,
+    /^\/api\/cors-test$/,
     /^\/docs(\.json)?$/,
     /^\/docs\/?/,
     /^\/api\/auth\/register$/,
