@@ -22,45 +22,20 @@ import { authenticateToken } from "./middleware/authMiddleware";
 
 const app = express();
 
-// Configure helmet to NOT interfere with CORS
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-  crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: false
-}));
-
-// CORS handling - AFTER helmet but BEFORE other middleware
-app.use((req, res, next) => {
-  console.log('🌐 CORS Debug:', {
-    origin: req.headers.origin,
-    method: req.method,
-    path: req.path
-  });
-  
-  // Set CORS headers for ALL requests
-  res.setHeader('Access-Control-Allow-Origin', 'https://message.shopzo.app');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-access-token, x-waba-id, Origin, Accept');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  
-  // Handle preflight OPTIONS request
-  if (req.method === 'OPTIONS') {
-    console.log('🔄 Handling OPTIONS preflight request');
-    res.status(204).end();
-    return;
-  }
-  
-  next();
-});
-
-// CORS middleware as backup
+app.use(helmet());
+// CORS configuration to allow both local development and production
 app.use(cors({
-  origin: 'https://message.shopzo.app',
+  origin: [
+    'http://localhost:3000',  // Allow local development frontend
+    'http://localhost:5173',  // Allow Vite preview port
+    'https://message.shopzo.app', // Allow production
+    'https://whatsapp-backend-315431551371.europe-west1.run.app', // Allow production
+    /^https:\/\/.*\.vercel\.app$/, // Allow Vercel deployments
+    /^https:\/\/.*\.netlify\.app$/, // Allow Netlify deployments
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id', 'Origin, Accept'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id'],
 }));
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
@@ -68,20 +43,6 @@ app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString() });
-});
-
-// Test CORS route
-app.get("/api/cors-test", (_req, res) => {
-  console.log('🧪 CORS test route hit');
-  res.json({ 
-    message: "CORS is working!", 
-    corsHeaders: {
-      origin: res.getHeader('Access-Control-Allow-Origin'),
-      methods: res.getHeader('Access-Control-Allow-Methods'),
-      credentials: res.getHeader('Access-Control-Allow-Credentials')
-    },
-    timestamp: new Date().toISOString()
-  });
 });
 
 // Test route to verify API is working
@@ -116,7 +77,6 @@ app.use((req, res, next) => {
   const allowlist: RegExp[] = [
     /^\/health$/,
     /^\/api\/test$/,
-    /^\/api\/cors-test$/,
     /^\/docs(\.json)?$/,
     /^\/docs\/?/,
     /^\/api\/auth\/register$/,
@@ -196,5 +156,4 @@ async function startServer() {
 }
 
 startServer();
-
 
