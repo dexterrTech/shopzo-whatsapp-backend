@@ -24,24 +24,7 @@ const app = express();
 
 // CORS configuration to allow both local development and production
 app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:5173', 
-      'https://message.shopzo.app',
-      'https://whatsapp-backend-315431551371.europe-west1.run.app'
-    ];
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log('🚫 CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: 'https://message.shopzo.app',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id', 'Origin', 'Accept'],
@@ -49,23 +32,24 @@ app.use(cors({
   optionsSuccessStatus: 204
 }));
 
-// Add CORS debugging
+// Add CORS debugging and manual headers
 app.use((req, res, next) => {
   console.log('🌐 CORS Debug:', {
     origin: req.headers.origin,
     method: req.method,
-    path: req.path,
-    userAgent: req.headers['user-agent']
+    path: req.path
   });
   
-  // Manual CORS headers as backup
-  res.header('Access-Control-Allow-Origin', 'https://message.shopzo.app');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-access-token, x-waba-id, Origin, Accept');
-  res.header('Access-Control-Allow-Credentials', 'true');
+  // Set CORS headers for all requests
+  res.setHeader('Access-Control-Allow-Origin', 'https://message.shopzo.app');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-access-token, x-waba-id, Origin, Accept');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   
+  // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
-    res.sendStatus(204);
+    console.log('🔄 Handling OPTIONS preflight request');
+    res.status(204).end();
     return;
   }
   
