@@ -28,8 +28,7 @@ app.use(cors({
   origin: [
     'http://localhost:3000',  // Allow local development frontend
     'http://localhost:5173',  // Allow Vite preview port
-    'https://message.shopzo.app',  // Remove trailing slash
-    'https://whatsapp-backend-315431551371.europe-west1.run.app', // Allow production
+    'https://message.shopzo.app',  // Your production frontend
     /^https:\/\/.*\.vercel\.app$/, // Allow Vercel deployments
     /^https:\/\/.*\.netlify\.app$/, // Allow Netlify deployments
   ],
