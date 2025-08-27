@@ -22,17 +22,7 @@ import { authenticateToken } from "./middleware/authMiddleware";
 
 const app = express();
 
-// CORS configuration to allow both local development and production
-app.use(cors({
-  origin: 'https://message.shopzo.app',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id', 'Origin', 'Accept'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}));
-
-// Add CORS debugging and manual headers
+// CORS handling - MUST be FIRST, before any other middleware
 app.use((req, res, next) => {
   console.log('🌐 CORS Debug:', {
     origin: req.headers.origin,
@@ -40,13 +30,13 @@ app.use((req, res, next) => {
     path: req.path
   });
   
-  // Set CORS headers for all requests
+  // Set CORS headers for ALL requests immediately
   res.setHeader('Access-Control-Allow-Origin', 'https://message.shopzo.app');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-access-token, x-waba-id, Origin, Accept');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   
-  // Handle preflight OPTIONS request
+  // Handle preflight OPTIONS request immediately
   if (req.method === 'OPTIONS') {
     console.log('🔄 Handling OPTIONS preflight request');
     res.status(204).end();
@@ -55,6 +45,16 @@ app.use((req, res, next) => {
   
   next();
 });
+
+// CORS middleware as backup (but manual headers should handle it first)
+app.use(cors({
+  origin: 'https://message.shopzo.app',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id', 'Origin', 'Accept'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+}));
 
 app.use(helmet());
 app.use(compression());
