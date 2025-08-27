@@ -22,20 +22,57 @@ import { authenticateToken } from "./middleware/authMiddleware";
 
 const app = express();
 
-app.use(helmet());
 // CORS configuration to allow both local development and production
 app.use(cors({
-  origin: [
-    'http://localhost:3000',  // Allow local development frontend
-    'http://localhost:5173',  // Allow Vite preview port
-    'https://message.shopzo.app',  // Your production frontend
-    /^https:\/\/.*\.vercel\.app$/, // Allow Vercel deployments
-    /^https:\/\/.*\.netlify\.app$/, // Allow Netlify deployments
-  ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5173', 
+      'https://message.shopzo.app',
+      'https://whatsapp-backend-315431551371.europe-west1.run.app'
+    ];
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('🚫 CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id', 'Origin', 'Accept'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
+
+// Add CORS debugging
+app.use((req, res, next) => {
+  console.log('🌐 CORS Debug:', {
+    origin: req.headers.origin,
+    method: req.method,
+    path: req.path,
+    userAgent: req.headers['user-agent']
+  });
+  
+  // Manual CORS headers as backup
+  res.header('Access-Control-Allow-Origin', 'https://message.shopzo.app');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-access-token, x-waba-id, Origin, Accept');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  
+  next();
+});
+
+app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
