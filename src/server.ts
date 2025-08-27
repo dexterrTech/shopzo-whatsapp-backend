@@ -22,8 +22,7 @@ import { authenticateToken } from "./middleware/authMiddleware";
 
 const app = express();
 
-app.use(helmet());
-// CORS configuration to allow both local development and production
+// CORS must run before helmet so preflight responses include CORS headers
 app.use(cors({
   origin: [
     'http://localhost:3000',  // Allow local development frontend
@@ -37,6 +36,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id'],
 }));
+
+app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
