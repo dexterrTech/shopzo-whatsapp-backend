@@ -118,6 +118,51 @@ router.post("/", authenticateToken, async (req, res, next) => {
 
 /**
  * @openapi
+ * /api/campaigns/export:
+ *   get:
+ *     tags:
+ *       - Campaigns
+ *     summary: Export campaigns as CSV
+ *     description: Download campaigns list as CSV (mock/demo as campaigns are not persisted yet)
+ *     responses:
+ *       200:
+ *         description: CSV file
+ *         content:
+ *           text/csv:
+ *             schema:
+ *               type: string
+ */
+router.get("/export", authenticateToken, async (req, res, next) => {
+  try {
+    const headers = ['id','name','trigger','audienceType','messageType','audienceSize','status','createdAt'];
+    const sample = [{
+      id: 'campaign-sample',
+      name: 'Sample Campaign',
+      trigger: 'IMMEDIATE',
+      audienceType: 'ALL',
+      messageType: 'TEMPLATE',
+      audienceSize: 0,
+      status: 'DRAFT',
+      createdAt: new Date().toISOString()
+    }];
+    const rows = sample.map((c: any) => headers.map((h) => {
+      const v = c[h];
+      const s = v === null || v === undefined ? '' : String(v);
+      const needsQuotes = s.includes(',') || s.includes('\n') || s.includes('"');
+      const escaped = s.replace(/"/g, '""');
+      return needsQuotes ? `"${escaped}"` : escaped;
+    }).join(','));
+    const csv = [headers.join(','), ...rows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="campaigns.csv"');
+    res.status(200).send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
  * /api/campaigns/send-template:
  *   post:
  *     tags:

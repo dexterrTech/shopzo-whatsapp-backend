@@ -3,6 +3,7 @@ import { z } from "zod";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
 import { authenticateToken } from "../middleware/authMiddleware";
+import { pool } from "../config/database";
 
 const router = Router();
 
@@ -142,7 +143,84 @@ router.post("/:phone_number_id/text", authenticateToken, async (req, res, next) 
       })
     });
 
+    // Save message to library on success
+    try {
+      const to = body?.to;
+      const msgId = (data as any)?.messages?.[0]?.id;
+      if (to && msgId) {
+        await pool.query(
+          `INSERT INTO messages (user_id, to_number, message_type, message_id, status, payload_json, response_json)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            (req as any)?.user?.id ?? null,
+            String(to),
+            'TEXT',
+            String(msgId),
+            'SENT',
+            JSON.stringify(body),
+            JSON.stringify(data)
+          ]
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to record message:', (e as any)?.message);
+    }
+
     res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/send-message:
+ *   get:
+ *     tags:
+ *       - Send Message
+ *     summary: List saved outbound messages (Message Library)
+ *     parameters:
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Filter by to_number, message_id, or message_type
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 200
+ *           default: 50
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           default: 0
+ *     responses:
+ *       200:
+ *         description: List of messages
+ */
+router.get("/", authenticateToken, async (req, res, next) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String((req.query as any)?.limit ?? '50'), 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(String((req.query as any)?.offset ?? '0'), 10) || 0, 0);
+    const search = String((req.query as any)?.search ?? '').trim();
+
+    let where = '';
+    const params: any[] = [limit, offset];
+    if (search) {
+      where = `WHERE to_number ILIKE $3 OR message_id ILIKE $3 OR message_type ILIKE $3`;
+      params.push(`%${search}%`);
+    }
+
+    const sql = `SELECT id, user_id, to_number, message_type, template_id, campaign_id, message_id, status, created_at
+                 FROM messages ${where}
+                 ORDER BY created_at DESC
+                 LIMIT $1 OFFSET $2`;
+    const result = await pool.query(sql, params);
+    res.json({ data: result.rows });
   } catch (err) {
     next(err);
   }
@@ -301,6 +379,28 @@ router.post("/:phone_number_id/media", authenticateToken, async (req, res, next)
         fallback: true
       })
     });
+
+    try {
+      const to = body?.to;
+      const msgId = (data as any)?.messages?.[0]?.id;
+      if (to && msgId) {
+        await pool.query(
+          `INSERT INTO messages (user_id, to_number, message_type, message_id, status, payload_json, response_json)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            (req as any)?.user?.id ?? null,
+            String(to),
+            'MEDIA',
+            String(msgId),
+            'SENT',
+            JSON.stringify(body),
+            JSON.stringify(data)
+          ]
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to record media message:', (e as any)?.message);
+    }
 
     res.json(data);
   } catch (err) {
@@ -468,6 +568,28 @@ router.post("/:phone_number_id/catalog", authenticateToken, async (req, res, nex
       })
     });
 
+    try {
+      const to = body?.to;
+      const msgId = (data as any)?.messages?.[0]?.id;
+      if (to && msgId) {
+        await pool.query(
+          `INSERT INTO messages (user_id, to_number, message_type, message_id, status, payload_json, response_json)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            (req as any)?.user?.id ?? null,
+            String(to),
+            'CATALOG',
+            String(msgId),
+            'SENT',
+            JSON.stringify(body),
+            JSON.stringify(data)
+          ]
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to record catalog message:', (e as any)?.message);
+    }
+
     res.json(data);
   } catch (err) {
     next(err);
@@ -627,6 +749,28 @@ router.post("/:phone_number_id/single-product", authenticateToken, async (req, r
         fallback: true
       })
     });
+
+    try {
+      const to = body?.to;
+      const msgId = (data as any)?.messages?.[0]?.id;
+      if (to && msgId) {
+        await pool.query(
+          `INSERT INTO messages (user_id, to_number, message_type, message_id, status, payload_json, response_json)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            (req as any)?.user?.id ?? null,
+            String(to),
+            'SINGLE_PRODUCT',
+            String(msgId),
+            'SENT',
+            JSON.stringify(body),
+            JSON.stringify(data)
+          ]
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to record single product message:', (e as any)?.message);
+    }
 
     res.json(data);
   } catch (err) {
@@ -822,6 +966,28 @@ router.post("/:phone_number_id/multi-product", authenticateToken, async (req, re
       })
     });
 
+    try {
+      const to = body?.to;
+      const msgId = (data as any)?.messages?.[0]?.id;
+      if (to && msgId) {
+        await pool.query(
+          `INSERT INTO messages (user_id, to_number, message_type, message_id, status, payload_json, response_json)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            (req as any)?.user?.id ?? null,
+            String(to),
+            'MULTI_PRODUCT',
+            String(msgId),
+            'SENT',
+            JSON.stringify(body),
+            JSON.stringify(data)
+          ]
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to record multi product message:', (e as any)?.message);
+    }
+
     res.json(data);
   } catch (err) {
     next(err);
@@ -962,6 +1128,28 @@ router.post("/:phone_number_id/reply", authenticateToken, async (req, res, next)
       })
     });
 
+    try {
+      const to = body?.to;
+      const msgId = (data as any)?.messages?.[0]?.id;
+      if (to && msgId) {
+        await pool.query(
+          `INSERT INTO messages (user_id, to_number, message_type, message_id, status, payload_json, response_json)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            (req as any)?.user?.id ?? null,
+            String(to),
+            'REPLY',
+            String(msgId),
+            'SENT',
+            JSON.stringify(body),
+            JSON.stringify(data)
+          ]
+        );
+      }
+    } catch (e) {
+      console.warn('Failed to record reply message:', (e as any)?.message);
+    }
+
     res.json(data);
   } catch (err) {
     next(err);
@@ -1058,3 +1246,47 @@ router.post("/:phone_number_id/mark-read", authenticateToken, async (req, res, n
 });
 
 export default router;
+/**
+ * @openapi
+ * /api/send-message/export:
+ *   get:
+ *     tags:
+ *       - Send Message
+ *     summary: Export sent messages as CSV
+ *     description: Downloads CSV of recorded outbound messages
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 10000
+ *         description: Max rows to export
+ *     responses:
+ *       200:
+ *         description: CSV file
+ */
+router.get("/export", authenticateToken, async (req, res, next) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String((req.query as any)?.limit ?? '1000'), 10) || 1000, 1), 10000);
+    const result = await pool.query(
+      `SELECT id, user_id, to_number, message_type, template_id, campaign_id, message_id, status, created_at
+       FROM messages ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+    const headers = ['id','user_id','to_number','message_type','template_id','campaign_id','message_id','status','created_at'];
+    const rows = result.rows.map((r: any) => headers.map((h) => {
+      const v = r[h];
+      const s = v === null || v === undefined ? '' : String(v);
+      const needsQuotes = s.includes(',') || s.includes('\n') || s.includes('"');
+      const escaped = s.replace(/"/g, '""');
+      return needsQuotes ? `"${escaped}"` : escaped;
+    }).join(','));
+    const csv = [headers.join(','), ...rows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="messages.csv"');
+    res.status(200).send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
