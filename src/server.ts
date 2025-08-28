@@ -28,6 +28,7 @@ app.use(cors({
     'http://localhost:3000',  // Allow local development frontend
     'http://localhost:5173',  // Allow Vite preview port
     'https://message.shopzo.app', // Allow production
+    'https://api.shopzo.app', // Allow API domain
     /^https:\/\/.*\.vercel\.app$/, // Allow Vercel deployments
     /^https:\/\/.*\.netlify\.app$/, // Allow Netlify deployments
   ],

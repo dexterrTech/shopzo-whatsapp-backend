@@ -37,8 +37,8 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Copy environment example file
-COPY .env.example ./
+# Copy environment file
+COPY .env ./
 
 # Change ownership to nodejs user
 RUN chown -R nodejs:nodejs /app
