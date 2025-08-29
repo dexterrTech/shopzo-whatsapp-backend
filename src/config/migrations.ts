@@ -309,6 +309,50 @@ export async function runMigrations() {
       ON CONFLICT (name) DO NOTHING;
     `);
 
+    // Create wallet_logs table for tracking wallet transactions
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wallet_logs (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        transaction_type VARCHAR(50) NOT NULL CHECK (transaction_type IN ('credit', 'debit', 'refund', 'adjustment')),
+        amount_paise INTEGER NOT NULL,
+        amount_currency VARCHAR(10) DEFAULT 'INR',
+        description TEXT,
+        reference_id VARCHAR(255),
+        status VARCHAR(20) DEFAULT 'completed' CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create WhatsApp setups table for tracking user WhatsApp Business setup
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS whatsapp_setups (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        phone_number_id VARCHAR(255),
+        waba_id VARCHAR(255),
+        business_id VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'not_started' CHECK (status IN (
+          'not_started', 
+          'embedded_signup_completed', 
+          'tp_signup_completed', 
+          'templates_setup_completed', 
+          'setup_completed'
+        )),
+        business_token TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id)
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_whatsapp_setups_user_id ON whatsapp_setups(user_id);
+      CREATE INDEX IF NOT EXISTS idx_whatsapp_setups_status ON whatsapp_setups(status);
+      CREATE INDEX IF NOT EXISTS idx_whatsapp_setups_waba_id ON whatsapp_setups(waba_id);
+    `);
+
     console.log('Migrations completed successfully');
   } catch (error) {
     console.error('Migration failed:', error);
