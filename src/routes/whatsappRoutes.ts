@@ -409,7 +409,10 @@ router.post('/send-test-message', authenticateToken, async (req, res) => {
  */
 router.get('/setup-status', authenticateToken, async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
 
     const result = await pool.query(`
       SELECT status, phone_number_id, waba_id, business_id, created_at, updated_at
