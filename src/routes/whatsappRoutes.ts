@@ -15,8 +15,9 @@ const embeddedSignupSchema = z.object({
 });
 
 const exchangeTokenSchema = z.object({
-  code: z.string()
-});
+  code: z.string().optional(),
+  business_token: z.string().optional()
+}).refine((d) => !!(d.code || d.business_token), { message: 'Provide either code or business_token' });
 
 const tpSignupSchema = z.object({
   waba_id: z.string(),
@@ -160,15 +161,21 @@ router.post('/exchange-token', authenticateToken, async (req, res) => {
 
     // Exchange code for business token and persist
     try {
-      const appId = env.APP_ID || '2524533311265577';
-      const appSecret = env.APP_SECRET;
-      if (!appSecret) {
-        return res.status(500).json({ success: false, message: 'Server missing APP_SECRET for token exchange' });
-      }
-      const exchange = await interaktClient.exchangeCodeForBusinessToken({ appId, appSecret, code: validatedData.code });
-      const businessToken = exchange?.access_token;
+      let businessToken = validatedData.business_token;
       if (!businessToken) {
-        return res.status(502).json({ success: false, message: 'Failed to exchange code for business token', details: exchange });
+        const appId = env.APP_ID || '2524533311265577';
+        const appSecret = env.APP_SECRET;
+        if (!appSecret) {
+          return res.status(500).json({ success: false, message: 'Server missing APP_SECRET for token exchange' });
+        }
+        if (!validatedData.code) {
+          return res.status(400).json({ success: false, message: 'Missing code for token exchange' });
+        }
+        const exchange = await interaktClient.exchangeCodeForBusinessToken({ appId, appSecret, code: validatedData.code });
+        businessToken = exchange?.access_token;
+      }
+      if (!businessToken) {
+        return res.status(502).json({ success: false, message: 'Failed to exchange code for business token' });
       }
       await pool.query(`
         UPDATE whatsapp_setups
