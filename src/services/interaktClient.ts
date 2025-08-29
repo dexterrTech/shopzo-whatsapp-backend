@@ -265,7 +265,7 @@ export class InteraktClient {
   }
 
   // Exchange Embedded Signup code for business token
-  async exchangeCodeForBusinessToken(params: { appId: string; appSecret: string; code: string; graphVersion?: string }) {
+  async exchangeCodeForBusinessToken(params: { appId: string; appSecret: string; code: string; graphVersion?: string; redirectUri?: string }) {
     const version = params.graphVersion || env.FACEBOOK_API_VERSION || 'v18.0';
     const url = `/${version}/oauth/access_token`;
     const res = await this.graphHttp.get(url, {
@@ -273,6 +273,7 @@ export class InteraktClient {
         client_id: params.appId,
         client_secret: params.appSecret,
         code: params.code,
+        ...(params.redirectUri ? { redirect_uri: params.redirectUri } : {}),
       },
     });
     return res.data; // expected to include access_token

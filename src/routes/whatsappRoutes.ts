@@ -16,7 +16,8 @@ const embeddedSignupSchema = z.object({
 
 const exchangeTokenSchema = z.object({
   code: z.string().optional(),
-  business_token: z.string().optional()
+  business_token: z.string().optional(),
+  redirect_uri: z.string().optional()
 }).refine((d) => !!(d.code || d.business_token), { message: 'Provide either code or business_token' });
 
 const tpSignupSchema = z.object({
@@ -171,7 +172,7 @@ router.post('/exchange-token', authenticateToken, async (req, res) => {
         if (!validatedData.code) {
           return res.status(400).json({ success: false, message: 'Missing code for token exchange' });
         }
-        const exchange = await interaktClient.exchangeCodeForBusinessToken({ appId, appSecret, code: validatedData.code });
+        const exchange = await interaktClient.exchangeCodeForBusinessToken({ appId, appSecret, code: validatedData.code, redirectUri: validatedData.redirect_uri });
         businessToken = exchange?.access_token;
       }
       if (!businessToken) {
