@@ -10,11 +10,12 @@ export type InteraktClientDeps = {
 export class InteraktClient {
   private http: AxiosInstance;
   private wabaId?: string;
+  private interaktHttp: AxiosInstance;
 
   constructor({ baseURL, wabaId, accessToken }: InteraktClientDeps = {}) {
     this.wabaId = wabaId ?? env.INTERAKT_WABA_ID;
     
-    // Use Facebook Graph API instead of Interakt API
+    // Use Facebook Graph API for WhatsApp actions
     const apiBaseURL = baseURL ?? env.FACEBOOK_GRAPH_API_BASE_URL;
     //const apiBaseURL = baseURL ?? env.INTERAKT_AMPED_EXPRESS_BASE_URL;
     
@@ -35,6 +36,26 @@ export class InteraktClient {
     });
 
     this.http = http;
+
+    // Separate client for Interakt public API calls (e.g., TP signup)
+    const interakt = axios.create({
+      baseURL: env.INTERAKT_API_BASE_URL || "https://api.interakt.ai",
+      timeout: 15_000,
+    });
+
+    interakt.interceptors.request.use((config) => {
+      const token = accessToken ?? env.INTERAKT_ACCESS_TOKEN;
+      if (token) {
+        config.headers = config.headers ?? {};
+        // Interakt docs show raw token in Authorization header (no Bearer)
+        config.headers["Authorization"] = token;
+      }
+      config.headers = config.headers ?? {};
+      config.headers["Content-Type"] = "application/json";
+      return config;
+    });
+
+    this.interaktHttp = interakt;
   }
 
   async getPhoneNumbers(params?: { sort?: "asc" | "desc" }) {
@@ -186,6 +207,53 @@ export class InteraktClient {
     const res = await analyticsHttp.get(url, { 
       params: { fields } 
     });
+    return res.data;
+  }
+
+  /**
+   * Interakt Tech Partner signup call
+   * Docs: POST /v1/organizations/tp-signup/
+   */
+  async techPartnerSignup(payload: {
+    waba_id: string;
+    solution_id?: string;
+    phone_number?: string;
+    authorizationTokenOverride?: string; // optional runtime token
+  }) {
+    const body: any = {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                event: "PARTNER_ADDED",
+                waba_info: {
+                  waba_id: payload.waba_id,
+                },
+              },
+            },
+          ],
+        },
+      ],
+      object: "tech_partner",
+    };
+
+    if (payload.solution_id) {
+      body.entry[0].changes[0].value.waba_info.solution_id = payload.solution_id;
+    }
+    if (payload.phone_number) {
+      body.entry[0].changes[0].value.waba_info.phone_number = payload.phone_number;
+    }
+
+    const headersOverride = payload.authorizationTokenOverride
+      ? { Authorization: payload.authorizationTokenOverride }
+      : undefined;
+
+    const res = await this.interaktHttp.post(
+      "/v1/organizations/tp-signup/",
+      body,
+      headersOverride ? { headers: headersOverride } : undefined
+    );
     return res.data;
   }
 }

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { pool } from '../config/database';
+import { interaktClient } from '../services/interaktClient';
 
 const router = Router();
 
@@ -18,7 +19,9 @@ const exchangeTokenSchema = z.object({
 
 const tpSignupSchema = z.object({
   waba_id: z.string(),
-  phone_number_id: z.string()
+  phone_number_id: z.string().optional(),
+  solution_id: z.string().optional(),
+  phone_number: z.string().optional()
 });
 
 const setupTemplatesSchema = z.object({
@@ -221,8 +224,18 @@ router.post('/tp-signup', authenticateToken, async (req, res) => {
       WHERE user_id = $1
     `, [userId]);
 
-    // TODO: Implement actual Interakt integration
-    console.log('TP signup completed for user:', userId, 'with WABA:', validatedData.waba_id);
+    // Call Interakt Tech Partner Onboarding API
+    try {
+      const response = await interaktClient.techPartnerSignup({
+        waba_id: validatedData.waba_id,
+        solution_id: validatedData.solution_id,
+        phone_number: validatedData.phone_number
+      });
+      console.log('Interakt TP signup response:', response);
+    } catch (e) {
+      console.error('Interakt TP signup failed:', e);
+      return res.status(502).json({ success: false, message: 'Interakt TP signup failed', error: (e as any)?.response?.data || (e as Error).message });
+    }
 
     res.json({
       success: true,
