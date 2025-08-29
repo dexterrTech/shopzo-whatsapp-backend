@@ -20,6 +20,10 @@ const EnvSchema = z.object({
   INTERAKT_AMPED_EXPRESS_BASE_URL: z.string().default("https://amped-express.interakt.ai"),
   INTERAKT_BASE_URL: z.string().default("https://interakt.ai"),
 
+  // Facebook App Credentials (for Embedded Signup token exchange)
+  APP_ID: z.string().default("2524533311265577"),
+  APP_SECRET: z.string().default("f752f6f45e9430e3dd936df1b4d1d83e"),
+
   // Webhook Configuration
   WEBHOOK_VERIFY_TOKEN: z.string().default("dev-verify-token"),
   WEBHOOK_URL: z.string().default(""),

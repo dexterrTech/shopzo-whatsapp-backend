@@ -11,6 +11,7 @@ export class InteraktClient {
   private http: AxiosInstance;
   private wabaId?: string;
   private interaktHttp: AxiosInstance;
+  private graphHttp: AxiosInstance;
 
   constructor({ baseURL, wabaId, accessToken }: InteraktClientDeps = {}) {
     this.wabaId = wabaId ?? env.INTERAKT_WABA_ID;
@@ -36,6 +37,12 @@ export class InteraktClient {
     });
 
     this.http = http;
+
+    // Facebook Graph API client without default auth; per-call tokens will be provided
+    this.graphHttp = axios.create({
+      baseURL: env.FACEBOOK_GRAPH_API_BASE_URL,
+      timeout: 15_000,
+    });
 
     // Separate client for Interakt public API calls (e.g., TP signup)
     const interakt = axios.create({
@@ -254,6 +261,85 @@ export class InteraktClient {
       body,
       headersOverride ? { headers: headersOverride } : undefined
     );
+    return res.data;
+  }
+
+  // Exchange Embedded Signup code for business token
+  async exchangeCodeForBusinessToken(params: { appId: string; appSecret: string; code: string; graphVersion?: string }) {
+    const version = params.graphVersion || env.FACEBOOK_API_VERSION || 'v18.0';
+    const url = `/${version}/oauth/access_token`;
+    const res = await this.graphHttp.get(url, {
+      params: {
+        client_id: params.appId,
+        client_secret: params.appSecret,
+        code: params.code,
+      },
+    });
+    return res.data; // expected to include access_token
+  }
+
+  // Subscribe app to customer's WABA webhooks
+  async subscribeAppToWaba(params: { wabaId: string; businessToken: string; graphVersion?: string }) {
+    const version = params.graphVersion || env.FACEBOOK_API_VERSION || 'v18.0';
+    const url = `/${version}/${params.wabaId}/subscribed_apps`;
+    const res = await this.graphHttp.post(url, {}, {
+      headers: { Authorization: `Bearer ${params.businessToken}` },
+    });
+    return res.data;
+  }
+
+  // Register customer's phone number for Cloud API
+  async registerBusinessPhoneNumber(params: { phoneNumberId: string; businessToken: string; pin: string; graphVersion?: string }) {
+    const version = params.graphVersion || env.FACEBOOK_API_VERSION || 'v18.0';
+    const url = `/${version}/${params.phoneNumberId}/register`;
+    const body = { messaging_product: 'whatsapp', pin: params.pin } as any;
+    const res = await this.graphHttp.post(url, body, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${params.businessToken}`,
+      },
+    });
+    return res.data;
+  }
+
+  // Send a text message using business token and customer's phone number id
+  async sendTextMessageWithBusinessToken(params: { phoneNumberId: string; businessToken: string; to: string; body: string; graphVersion?: string }) {
+    const version = params.graphVersion || env.FACEBOOK_API_VERSION || 'v18.0';
+    const url = `/${version}/${params.phoneNumberId}/messages`;
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: params.to,
+      type: 'text',
+      text: { body: params.body },
+    };
+    const res = await this.graphHttp.post(url, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${params.businessToken}`,
+      },
+    });
+    return res.data;
+  }
+  // Send a template message using business token
+  async sendTemplateMessageWithBusinessToken(params: { phoneNumberId: string; businessToken: string; to: string; templateName: string; languageCode: string; graphVersion?: string }) {
+    const version = params.graphVersion || env.FACEBOOK_API_VERSION || 'v18.0';
+    const url = `/${version}/${params.phoneNumberId}/messages`;
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: params.to,
+      type: 'template',
+      template: {
+        name: params.templateName,
+        language: { code: params.languageCode },
+      },
+    } as any;
+    const res = await this.graphHttp.post(url, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${params.businessToken}`,
+      },
+    });
     return res.data;
   }
 }

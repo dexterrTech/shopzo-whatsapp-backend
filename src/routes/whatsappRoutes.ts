@@ -34,6 +34,12 @@ const testMessageSchema = z.object({
   phone_number_id: z.string()
 });
 
+const registerNumberSchema = z.object({
+  waba_id: z.string().optional(),
+  phone_number_id: z.string().optional(),
+  pin: z.string().regex(/^\d{6}$/)
+});
+
 /**
  * @swagger
  * /api/whatsapp/embedded-signup:
@@ -152,17 +158,28 @@ router.post('/exchange-token', authenticateToken, async (req, res) => {
       return res.status(401).json({ success: false, message: 'Authentication required' });
     }
 
-    // Here you would make a call to Meta's API to exchange the code for a business token
-    // For now, we'll just acknowledge the request
-    console.log('Token exchange requested for user:', userId, 'with code:', validatedData.code);
-
-    // TODO: Implement actual token exchange with Meta API
-    // const businessToken = await exchangeTokenWithMeta(validatedData.code);
-
-    res.json({
-      success: true,
-      message: 'Token exchange initiated'
-    });
+    // Exchange code for business token and persist
+    try {
+      const appId = env.APP_ID || '2524533311265577';
+      const appSecret = env.APP_SECRET;
+      if (!appSecret) {
+        return res.status(500).json({ success: false, message: 'Server missing APP_SECRET for token exchange' });
+      }
+      const exchange = await interaktClient.exchangeCodeForBusinessToken({ appId, appSecret, code: validatedData.code });
+      const businessToken = exchange?.access_token;
+      if (!businessToken) {
+        return res.status(502).json({ success: false, message: 'Failed to exchange code for business token', details: exchange });
+      }
+      await pool.query(`
+        UPDATE whatsapp_setups
+        SET business_token = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $2
+      `, [businessToken, userId]);
+      res.json({ success: true, message: 'Token exchanged successfully' });
+    } catch (e) {
+      console.error('Error exchanging code for business token:', e);
+      return res.status(502).json({ success: false, message: 'Token exchange failed', error: (e as any)?.response?.data || (e as Error).message });
+    }
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({
@@ -367,20 +384,58 @@ router.post('/send-test-message', authenticateToken, async (req, res) => {
       return res.status(401).json({ success: false, message: 'Authentication required' });
     }
 
-    // Update WhatsApp setup status to completed
+    // Load business token and phone number from DB
+    const setup = await pool.query('SELECT business_token, phone_number_id FROM whatsapp_setups WHERE user_id = $1', [userId]);
+    const businessToken: string | null = setup.rows?.[0]?.business_token || null;
+    const phoneNumberId: string = (validatedData.phone_number_id || setup.rows?.[0]?.phone_number_id);
+    if (!businessToken) {
+      return res.status(400).json({ success: false, message: 'Business token not found. Exchange token first.' });
+    }
+    if (!phoneNumberId) {
+      return res.status(400).json({ success: false, message: 'Phone number ID not found.' });
+    }
+
+    // Optionally subscribe app to WABA (best effort)
+    try {
+      if (validatedData.waba_id) {
+        await interaktClient.subscribeAppToWaba({ wabaId: validatedData.waba_id, businessToken });
+      }
+    } catch {}
+
+    // Send a text message if client provided destination
+    const to = (req.body as any)?.to as string | undefined;
+    const body = (req.body as any)?.text as string | undefined;
+    const templateName = (req.body as any)?.template_name as string | undefined;
+    const languageCode = (req.body as any)?.language_code as string | undefined;
+    if (to && body) {
+      try {
+        const textRes = await interaktClient.sendTextMessageWithBusinessToken({ phoneNumberId, businessToken, to, body });
+        console.log('Text message response:', textRes);
+      } catch (e) {
+        // Fallback to template if 24-hour session not open
+        try {
+          const tpl = await interaktClient.sendTemplateMessageWithBusinessToken({
+            phoneNumberId,
+            businessToken,
+            to,
+            templateName: templateName || 'hello_world',
+            languageCode: languageCode || 'en_US',
+          });
+          console.log('Template message response:', tpl);
+        } catch (e2) {
+          return res.status(502).json({ success: false, message: 'Failed to send message (text and template fallback failed)', error: (e2 as any)?.response?.data || (e2 as Error).message });
+        }
+      }
+    }
+
+    // Mark setup as completed
     await pool.query(`
       UPDATE whatsapp_setups 
       SET status = 'setup_completed', updated_at = CURRENT_TIMESTAMP
       WHERE user_id = $1
     `, [userId]);
 
-    // TODO: Implement actual test message sending with Meta API
-    console.log('Test message sent for user:', userId, 'with WABA:', validatedData.waba_id);
-
-    res.json({
-      success: true,
-      message: 'Test message sent successfully. Setup completed!'
-    });
+    res.json({ success: true, message: 'Test message processed. Setup completed!' });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({
@@ -395,6 +450,38 @@ router.post('/send-test-message', authenticateToken, async (req, res) => {
       success: false,
       message: 'Internal server error'
     });
+  }
+});
+
+// Register customer's phone number with a 6-digit PIN (Step 4)
+router.post('/register-number', authenticateToken, async (req, res) => {
+  try {
+    const { waba_id, phone_number_id, pin } = registerNumberSchema.parse(req.body);
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    const setup = await pool.query('SELECT business_token, phone_number_id, waba_id FROM whatsapp_setups WHERE user_id = $1', [userId]);
+    const businessToken: string | null = setup.rows?.[0]?.business_token || null;
+    const pnId = phone_number_id || setup.rows?.[0]?.phone_number_id;
+    const wabaId = waba_id || setup.rows?.[0]?.waba_id;
+    if (!businessToken) return res.status(400).json({ success: false, message: 'Business token not found. Run token exchange first.' });
+    if (!pnId) return res.status(400).json({ success: false, message: 'Phone number ID not found.' });
+
+    // Subscribe app to WABA first (best effort)
+    if (wabaId) {
+      try { await interaktClient.subscribeAppToWaba({ wabaId, businessToken }); } catch {}
+    }
+
+    const result = await interaktClient.registerBusinessPhoneNumber({ phoneNumberId: pnId, businessToken, pin });
+
+    res.json({ success: true, message: 'Phone number registration initiated', data: result });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    return res.status(500).json({ success: false, message: 'Failed to register number', error: (error as any)?.response?.data || (error as Error).message });
   }
 });
 
