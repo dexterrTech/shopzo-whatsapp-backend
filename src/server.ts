@@ -13,6 +13,7 @@ import sendMessageRoutes from "./routes/sendMessage";
 import authRoutes from "./routes/authRoutes";
 import billingRoutes from "./routes/billingRoutes";
 import walletRoutes from "./routes/walletRoutes";
+import whatsappRoutes from "./routes/whatsappRoutes";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
 import swaggerUi from "swagger-ui-express";
@@ -46,6 +47,11 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString() });
 });
 
+// Mirror health under /api for proxies that route only /api/*
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString(), path: "/api/health" });
+});
+
 // Test route to verify API is working
 app.get("/api/test", (_req, res) => {
   res.json({ 
@@ -77,12 +83,16 @@ app.get("/api/interaktWebhook", (req, res) => {
 app.use((req, res, next) => {
   const allowlist: RegExp[] = [
     /^\/health$/,
+    /^\/api\/health$/,
     /^\/api\/test$/,
     /^\/docs(\.json)?$/,
     /^\/docs\/?/,
+    /^\/api\/docs(\.json)?$/,
+    /^\/api\/docs\/?/,
     /^\/api\/auth\/register$/,
     /^\/api\/auth\/login$/,
     /^\/api\/interaktWebhook$/,
+    /^\/api\/interakt\/interaktWebhook$/,
   ];
   if (req.method === 'OPTIONS') return next();
   if (allowlist.some((rx) => rx.test(req.path))) return next();
@@ -98,6 +108,7 @@ app.use("/api/acc-matrics", accMatricsRoutes);
 app.use("/api/phone-numbers", phoneNumbersRoutes);
 app.use("/api/conversational-components", conversationalComponentsRoutes);
 app.use("/api/send-message", sendMessageRoutes);
+app.use("/api/whatsapp", whatsappRoutes);
 
 // Billing routes (after auth so we can protect with middleware)
 app.use("/api/billing", billingRoutes);
@@ -132,11 +143,16 @@ if (missingEnvVars.length > 0) {
   console.warn("Some features may not work properly in development mode");
 }
 
-// Swagger docs
+// Swagger docs (root and under /api for proxies that only forward /api/*)
 app.get("/docs.json", (_req, res) => {
   res.json(swaggerSpec);
 });
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+app.get("/api/docs.json", (_req, res) => {
+  res.json(swaggerSpec);
+});
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use(errorHandler);
 
@@ -145,7 +161,7 @@ async function startServer() {
   app.listen(numericPort, '0.0.0.0', () => {
     // eslint-disable-next-line no-console
     console.log(`Server listening on http://localhost:${numericPort}`);
-    console.log(`Swagger docs available at http://localhost:${numericPort}/docs`);
+    console.log(`Swagger docs available at http://localhost:${numericPort}/docs and /api/docs`);
   });
 
   try {
