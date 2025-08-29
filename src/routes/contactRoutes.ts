@@ -177,6 +177,58 @@ router.get("/", authenticateToken, async (req, res, next) => {
 
 /**
  * @openapi
+ * /api/contacts/export:
+ *   get:
+ *     tags:
+ *       - Contacts
+ *     summary: Export contacts as CSV
+ *     description: Download all contacts (optionally filtered by search) as CSV
+ *     parameters:
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search term to filter contacts by name, email, or phone
+ *     responses:
+ *       200:
+ *         description: CSV file
+ *         content:
+ *           text/csv:
+ *             schema:
+ *               type: string
+ */
+router.get("/export", authenticateToken, async (req, res, next) => {
+  try {
+    const querySchema = z.object({ search: z.string().optional() });
+    const { search } = querySchema.parse(req.query);
+
+    const contacts = search
+      ? await ContactService.searchContacts(search)
+      : await ContactService.getAllContacts();
+
+    const headers = [
+      'id','name','email','whatsapp_number','phone','telegram_id','viber_id','line_id','instagram_id','facebook_id','created_at','last_seen_at'
+    ];
+    const rows = contacts.map((c: any) => headers.map((h) => {
+      const v = c[h as keyof typeof c];
+      const s = v === null || v === undefined ? '' : String(v);
+      // Escape CSV
+      const needsQuotes = s.includes(',') || s.includes('\n') || s.includes('"');
+      const escaped = s.replace(/"/g, '""');
+      return needsQuotes ? `"${escaped}"` : escaped;
+    }).join(','));
+
+    const csv = [headers.join(','), ...rows].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="contacts.csv"');
+    res.status(200).send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
  * /api/contacts/{id}:
  *   get:
  *     tags:

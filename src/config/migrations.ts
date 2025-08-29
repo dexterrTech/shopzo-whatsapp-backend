@@ -243,6 +243,29 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_system_wallet_type ON system_wallet(wallet_type);
     `);
 
+    // Messages library: store successful outbound messages
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users_whatsapp(id) ON DELETE SET NULL,
+        to_number VARCHAR(32) NOT NULL,
+        message_type VARCHAR(32) NOT NULL,
+        template_id VARCHAR(128),
+        campaign_id VARCHAR(128),
+        message_id VARCHAR(128),
+        status VARCHAR(32) NOT NULL DEFAULT 'SENT',
+        payload_json JSONB,
+        response_json JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_messages_to_number ON messages(to_number);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+    `);
+
     // Add unique constraints if they don't exist
     try {
       await pool.query(`
