@@ -27,7 +27,9 @@ const app = express();
 app.use(cors({
   origin: [
     'http://localhost:3000',  // Allow local development frontend
+    'http://127.0.0.1:3000',  // Allow local dev via 127.0.0.1
     'http://localhost:5173',  // Allow Vite preview port
+    'https://shopzo-whatsapp-frontend-1-315431551371.europe-west1.run.app', // Allow Vite preview port
     'https://message.shopzo.app', // Allow production
     'https://api.shopzo.app', // Allow API domain
     /^https:\/\/.*\.vercel\.app$/, // Allow Vercel deployments

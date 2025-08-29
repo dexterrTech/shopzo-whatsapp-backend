@@ -16,7 +16,7 @@ const options: swaggerJSDoc.Options = {
         description: 'Local Development'
       },
       {
-        url: 'https://shopzo-whatsapp-backend-315431551371.europe-west1.run.app',
+        url: 'https://shopzo-whatsapp-backend-1-315431551371.europe-west1.run.app',
         description: 'Production Server'
       }
     ],
