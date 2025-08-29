@@ -48,7 +48,7 @@ const EnvSchema = z.object({
     .transform((v) => (v ? v.toLowerCase() === "true" : true)),
   
   // API Versions
-  FACEBOOK_API_VERSION: z.string().default("v18.0"),
+  FACEBOOK_API_VERSION: z.string().default("v21.0"),
   INTERAKT_API_VERSION: z.string().default("v1"),
   
   // JWT Configuration
