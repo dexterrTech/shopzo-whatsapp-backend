@@ -12,6 +12,7 @@ const EnvSchema = z.object({
   INTERAKT_WABA_ID: z.string().default("dev_waba_id"),
   INTERAKT_ACCESS_TOKEN: z.string().default("dev_access_token"),
   INTERAKT_PHONE_NUMBER_ID: z.string().default("dev_phone_number_id"),
+  INTERAKT_SOLUTION_ID: z.string().default("1985687578474211"),
 
   // API Base URLs
   FACEBOOK_GRAPH_API_BASE_URL: z.string().default("https://graph.facebook.com"),

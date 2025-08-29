@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { pool } from '../config/database';
 import { interaktClient } from '../services/interaktClient';
+import { env } from '../config/env';
 
 const router = Router();
 
@@ -226,9 +227,13 @@ router.post('/tp-signup', authenticateToken, async (req, res) => {
 
     // Call Interakt Tech Partner Onboarding API
     try {
+      const solutionId = validatedData.solution_id || env.INTERAKT_SOLUTION_ID;
+      if (!solutionId || solutionId === 'dev_solution_id') {
+        return res.status(400).json({ success: false, message: 'solution_id is required (set INTERAKT_SOLUTION_ID in env or pass in body).' });
+      }
       const response = await interaktClient.techPartnerSignup({
         waba_id: validatedData.waba_id,
-        solution_id: validatedData.solution_id,
+        solution_id: solutionId,
         phone_number: validatedData.phone_number
       });
       console.log('Interakt TP signup response:', response);
