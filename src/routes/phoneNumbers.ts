@@ -3,8 +3,23 @@ import { z } from "zod";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
 import { authenticateToken } from "../middleware/authMiddleware";
+import { pool } from "../config/database";
 
 const router = Router();
+
+// Helper function to get user's WhatsApp setup
+async function getUserWhatsAppSetup(userId: number) {
+  const result = await pool.query(
+    'SELECT waba_id, phone_number_id FROM whatsapp_setups WHERE user_id = $1 AND waba_id IS NOT NULL AND phone_number_id IS NOT NULL',
+    [userId]
+  );
+  
+  if (result.rows.length === 0) {
+    throw new Error('WhatsApp setup not completed. Please complete WhatsApp Business setup first.');
+  }
+  
+  return result.rows[0];
+}
 
 /**
  * @openapi
@@ -206,6 +221,310 @@ router.get("/subscribed-apps", authenticateToken, async (req, res, next) => {
     res.json(data);
   } catch (err) {
     next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/phone-numbers/my-business-profile:
+ *   get:
+ *     tags:
+ *       - Phone Numbers
+ *     summary: Get My WhatsApp Business Profile
+ *     description: Get the current user's WhatsApp business profile information.
+ *     responses:
+ *       200:
+ *         description: Business profile retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       about:
+ *                         type: string
+ *                       address:
+ *                         type: string
+ *                       description:
+ *                         type: string
+ *                       email:
+ *                         type: string
+ *                       profile_picture_url:
+ *                         type: string
+ *                       websites:
+ *                         type: array
+ *                         items:
+ *                           type: string
+ *                       vertical:
+ *                         type: string
+ *                       messaging_product:
+ *                         type: string
+ *                 fallback:
+ *                   type: boolean
+ */
+// GET /api/phone-numbers/my-business-profile - Get current user's business profile (MUST come before /:phone_number_id routes)
+router.get("/my-business-profile", authenticateToken, async (req, res, next) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Get user's WhatsApp setup
+    let setup;
+    try {
+      setup = await getUserWhatsAppSetup(userId);
+      console.log('WhatsApp setup found for user:', userId, setup);
+    } catch (setupError) {
+      console.error('Error getting WhatsApp setup:', setupError);
+      return res.status(400).json({ 
+        error: setupError instanceof Error ? setupError.message : 'Failed to get WhatsApp setup',
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+
+    const data = await withFallback({
+      feature: "getMyBusinessProfile",
+      attempt: async () => {
+        console.log('Calling Interakt API to get business profile for phone number:', setup.phone_number_id);
+        
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${setup.phone_number_id}/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical`, {
+          method: 'GET',
+          headers: {
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+            'x-waba-id': setup.waba_id,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        console.log('Interakt API response status:', response.status, response.statusText);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Interakt API error response:', errorText);
+          throw new Error(`Get business profile API error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+
+        const responseData = await response.json();
+        console.log('Interakt API success response:', responseData);
+        return responseData;
+      },
+      fallback: () => {
+        console.log('Using fallback response for business profile');
+        return {
+          data: [
+            {
+              about: "✅This account is powered by Interakt.shop",
+              address: "",
+              description: "Search, Sell, Message etc",
+              email: "info@interakt.shop",
+              profile_picture_url: "https://pps.whatsapp.net/v/t61.24694-24/369533397_322723140293213_1495487253937962747_n.jpg?ccb=11-4&oh=01_AdTa-zpnJ7s93_h9AVlO7QODqDsFr40zqLrnDT-bA1q0Bg&oe=65D61D14&_nc_sid=e6ed6c&_nc_cat=110",
+              websites: [
+                "https://www.interakt.shop"
+              ],
+              vertical: "PROF_SERVICES",
+              messaging_product: "whatsapp"
+            }
+          ],
+          fallback: true
+        };
+      }
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error('Error in getMyBusinessProfile route:', err);
+    if (err instanceof Error && err.message.includes('WhatsApp setup not completed')) {
+      return res.status(400).json({ 
+        error: err.message,
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+    // Return a proper error response instead of calling next(err)
+    return res.status(500).json({ 
+      error: true,
+      message: err instanceof Error ? err.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? err : undefined
+    });
+  }
+});
+
+/**
+ * @openapi
+ * /api/phone-numbers/my-business-profile:
+ *   post:
+ *     tags:
+ *       - Phone Numbers
+ *     summary: Update My WhatsApp Business Profile
+ *     description: Update the current user's WhatsApp business profile information.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - messaging_product
+ *             properties:
+ *               messaging_product:
+ *                 type: string
+ *                 enum: [whatsapp]
+ *                 description: Always set to "whatsapp"
+ *               about:
+ *                 type: string
+ *                 maxLength: 139
+ *                 description: Business about text (1-139 characters)
+ *               address:
+ *                 type: string
+ *                 maxLength: 256
+ *                 description: Business address
+ *               description:
+ *                 type: string
+ *                 maxLength: 512
+ *                 description: Business description
+ *               email:
+ *                 type: string
+ *                 maxLength: 128
+ *                 description: Business email address
+ *               profile_picture_handle:
+ *                 type: string
+ *                 description: Profile picture handle from upload API
+ *               vertical:
+ *                 type: string
+ *                 enum: [UNDEFINED, OTHER, AUTO, BEAUTY, APPAREL, EDU, ENTERTAIN, EVENT_PLAN, FINANCE, GROCERY, GOVT, HOTEL, HEALTH, NONPROFIT, PROF_SERVICES, RETAIL, TRAVEL, RESTAURANT, NOT_A_BIZ]
+ *                 description: Industry of the business
+ *               websites:
+ *                 type: array
+ *                 maxItems: 2
+ *                 items:
+ *                   type: string
+ *                   maxLength: 256
+ *                 description: Business websites (max 2)
+ *     responses:
+ *       200:
+ *         description: Business profile updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 fallback:
+ *                   type: boolean
+ */
+// POST /api/phone-numbers/my-business-profile - Update current user's business profile (MUST come before /:phone_number_id routes)
+router.post("/my-business-profile", authenticateToken, async (req, res, next) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const body = req.body;
+
+    // Validate required fields
+    if (!body.messaging_product || body.messaging_product !== 'whatsapp') {
+      return res.status(400).json({ error: "messaging_product must be 'whatsapp'" });
+    }
+
+    // Validate field lengths
+    if (body.about && body.about.length > 139) {
+      return res.status(400).json({ error: "about field cannot exceed 139 characters" });
+    }
+    if (body.address && body.address.length > 256) {
+      return res.status(400).json({ error: "address field cannot exceed 256 characters" });
+    }
+    if (body.description && body.description.length > 512) {
+      return res.status(400).json({ error: "description field cannot exceed 512 characters" });
+    }
+    if (body.email && body.email.length > 128) {
+      return res.status(400).json({ error: "email field cannot exceed 128 characters" });
+    }
+    if (body.websites && body.websites.length > 2) {
+      return res.status(400).json({ error: "websites field cannot exceed 2 URLs" });
+    }
+    if (body.websites) {
+      for (const website of body.websites) {
+        if (website.length > 256) {
+          return res.status(400).json({ error: "each website URL cannot exceed 256 characters" });
+        }
+      }
+    }
+
+    // Get user's WhatsApp setup
+    let setup;
+    try {
+      setup = await getUserWhatsAppSetup(userId);
+      console.log('WhatsApp setup found:', setup);
+    } catch (setupError) {
+      console.error('Error getting WhatsApp setup:', setupError);
+      return res.status(400).json({ 
+        error: setupError instanceof Error ? setupError.message : 'Failed to get WhatsApp setup',
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+
+    const data = await withFallback({
+      feature: "updateMyBusinessProfile",
+      attempt: async () => {
+        console.log('Calling Interakt API with:', {
+          url: `${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${setup.phone_number_id}/whatsapp_business_profile`,
+          headers: {
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN ? `${env.INTERAKT_ACCESS_TOKEN.substring(0, 20)}...` : 'NOT_SET',
+            'x-waba-id': setup.waba_id,
+            'Content-Type': 'application/json'
+          },
+          body: body
+        });
+
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${setup.phone_number_id}/whatsapp_business_profile`, {
+          method: 'POST',
+          headers: {
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+            'x-waba-id': setup.waba_id,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        console.log('Interakt API response status:', response.status, response.statusText);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Interakt API error response:', errorText);
+          throw new Error(`Update business profile API error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+
+        const responseData = await response.json();
+        console.log('Interakt API success response:', responseData);
+        return responseData;
+      },
+      fallback: () => ({
+        success: true,
+        fallback: true
+      })
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error('Error in updateMyBusinessProfile route:', err);
+    if (err instanceof Error && err.message.includes('WhatsApp setup not completed')) {
+      return res.status(400).json({ 
+        error: err.message,
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+    // Return a proper error response instead of calling next(err)
+    return res.status(500).json({ 
+      error: true,
+      message: err instanceof Error ? err.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? err : undefined
+    });
   }
 });
 
@@ -824,5 +1143,7 @@ router.post("/:phone_number_id/webhook-configuration", authenticateToken, async 
     next(err);
   }
 });
+
+
 
 export default router;

@@ -14,6 +14,8 @@ import authRoutes from "./routes/authRoutes";
 import billingRoutes from "./routes/billingRoutes";
 import walletRoutes from "./routes/walletRoutes";
 import whatsappRoutes from "./routes/whatsappRoutes";
+import templateRoutes from "./routes/templateRoutes";
+import sendTemplateRoutes from "./routes/sendTemplate";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
 import swaggerUi from "swagger-ui-express";
@@ -111,6 +113,8 @@ app.use("/api/phone-numbers", phoneNumbersRoutes);
 app.use("/api/conversational-components", conversationalComponentsRoutes);
 app.use("/api/send-message", sendMessageRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
+app.use("/api/templates", templateRoutes);
+app.use("/api/send-template", sendTemplateRoutes);
 
 // Billing routes (after auth so we can protect with middleware)
 app.use("/api/billing", billingRoutes);

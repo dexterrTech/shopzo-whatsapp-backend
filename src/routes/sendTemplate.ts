@@ -1,0 +1,1149 @@
+import { Router } from "express";
+import { z } from "zod";
+import { authenticateToken } from "../middleware/authMiddleware";
+import { pool } from "../config/database";
+import { env } from "../config/env";
+
+const router = Router();
+
+// Types for campaign and message tracking
+export interface Campaign {
+  id: string;
+  name: string;
+  trigger: "IMMEDIATE" | "SCHEDULED";
+  audienceType: "ALL" | "SEGMENTED" | "QUICK";
+  messageType: "TEMPLATE" | "REGULAR" | "BOT";
+  templateId?: string;
+  message?: string;
+  audienceSize: number;
+  status: "DRAFT" | "ACTIVE" | "COMPLETED" | "FAILED";
+  createdAt: string;
+  scheduledAt?: string;
+  processedAt?: string;
+  completedAt?: string;
+  userId: number;
+}
+
+export interface MessageLog {
+  id: string;
+  campaignId: string;
+  to: string;
+  templateName: string;
+  languageCode: string;
+  messageId: string;
+  status: "PENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED";
+  sentAt?: string;
+  deliveredAt?: string;
+  readAt?: string;
+  failedAt?: string;
+  errorMessage?: string;
+  userId: number;
+  createdAt: string;
+}
+
+/**
+ * @swagger
+ * /api/send-template/campaigns:
+ *   post:
+ *     tags:
+ *       - Send Template
+ *     summary: Create a new campaign
+ *     description: Creates a new campaign for sending template messages
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - trigger
+ *               - audienceType
+ *               - messageType
+ *               - audienceSize
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Campaign name
+ *               trigger:
+ *                 type: string
+ *                 enum: ["IMMEDIATE", "SCHEDULED"]
+ *                 description: When to trigger the campaign
+ *               audienceType:
+ *                 type: string
+ *                 enum: ["ALL", "SEGMENTED", "QUICK"]
+ *                 description: Type of audience selection
+ *               messageType:
+ *                 type: string
+ *                 enum: ["TEMPLATE", "REGULAR", "BOT"]
+ *                 description: Type of message to send
+ *               templateId:
+ *                 type: string
+ *                 description: Template ID if using template message
+ *               message:
+ *                 type: string
+ *                 description: Custom message if using regular message
+ *               audienceSize:
+ *                 type: number
+ *                 description: Number of recipients
+ *               scheduledAt:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Scheduled time for campaign
+ *     responses:
+ *       201:
+ *         description: Campaign created successfully
+ *       400:
+ *         description: Bad request
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+// POST /api/send-template/campaigns - Create new campaign
+router.post("/campaigns", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
+
+    const bodySchema = z.object({
+      name: z.string().min(1),
+      trigger: z.enum(["IMMEDIATE", "SCHEDULED"]),
+      audienceType: z.enum(["ALL", "SEGMENTED", "QUICK"]),
+      messageType: z.enum(["TEMPLATE", "REGULAR", "BOT"]),
+      templateId: z.string().optional(),
+      message: z.string().optional(),
+      audienceSize: z.number().positive(),
+      scheduledAt: z.string().optional(),
+    });
+
+    const body = bodySchema.parse(req.body);
+
+    // Validate required fields based on message type
+    if (body.messageType === "TEMPLATE" && !body.templateId) {
+      return res.status(400).json({
+        success: false,
+        message: "Template ID is required for template messages"
+      });
+    }
+
+    if (body.messageType === "REGULAR" && !body.message) {
+      return res.status(400).json({
+        success: false,
+        message: "Message content is required for regular messages"
+      });
+    }
+
+    if (body.trigger === "SCHEDULED" && !body.scheduledAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Scheduled time is required for scheduled campaigns"
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      // Create campaign record
+      const campaignResult = await client.query(
+        `INSERT INTO campaigns (
+          name, trigger_type, audience_type, message_type, template_id, 
+          message_content, audience_size, scheduled_at, status, user_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        RETURNING *`,
+        [
+          body.name,
+          body.trigger,
+          body.audienceType,
+          body.messageType,
+          body.templateId || null,
+          body.message || null,
+          body.audienceSize,
+          body.scheduledAt ? new Date(body.scheduledAt) : null,
+          body.trigger === "IMMEDIATE" ? "ACTIVE" : "DRAFT",
+          userId
+        ]
+      );
+
+      const campaign = campaignResult.rows[0];
+
+      // If immediate campaign, start processing
+      if (body.trigger === "IMMEDIATE") {
+        // Update status to processing
+        await client.query(
+          'UPDATE campaigns SET status = $1, processed_at = NOW() WHERE id = $2',
+          ['PROCESSING', campaign.id]
+        );
+      }
+
+      res.status(201).json({
+        success: true,
+        data: {
+          id: campaign.id,
+          name: campaign.name,
+          trigger: campaign.trigger_type,
+          audienceType: campaign.audience_type,
+          messageType: campaign.message_type,
+          templateId: campaign.template_id,
+          message: campaign.message_content,
+          audienceSize: campaign.audience_size,
+          status: campaign.status,
+          createdAt: campaign.created_at,
+          scheduledAt: campaign.scheduled_at,
+          userId: campaign.user_id
+        },
+        message: "Campaign created successfully"
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error: any) {
+    console.error('Error creating campaign:', error);
+    
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid request data',
+        errors: error.errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while creating campaign',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/send-template/send:
+ *   post:
+ *     tags:
+ *       - Send Template
+ *     summary: Send template message to contacts
+ *     description: Sends a template message to multiple contacts and logs the results
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - campaignId
+ *               - contacts
+ *               - templateName
+ *               - languageCode
+ *             properties:
+ *               campaignId:
+ *                 type: string
+ *                 description: Campaign ID
+ *               contacts:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     whatsappNumber:
+ *                       type: string
+ *                 description: Array of contacts to send to
+ *               templateName:
+ *                 type: string
+ *                 description: Name of the template to send
+ *               languageCode:
+ *                 type: string
+ *                 description: Language code for the template
+ *               parameters:
+ *                 type: array
+ *                 description: Optional parameters for the template
+ *     responses:
+ *       200:
+ *         description: Messages sent successfully
+ *       400:
+ *         description: Bad request
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+// POST /api/send-template/send - Send template messages to contacts
+router.post("/send", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
+
+    const bodySchema = z.object({
+      campaignId: z.string(),
+      contacts: z.array(z.object({
+        id: z.string(),
+        whatsappNumber: z.string()
+      })),
+      templateName: z.string(),
+      languageCode: z.string().min(2).max(5),
+      parameters: z.array(z.any()).optional(),
+    });
+
+    const body = bodySchema.parse(req.body);
+
+           // Get user's WhatsApp setup from database
+       const client = await pool.connect();
+       try {
+         const setupResult = await client.query(
+           'SELECT waba_id, phone_number_id FROM whatsapp_setups WHERE user_id = $1 AND waba_id IS NOT NULL AND phone_number_id IS NOT NULL',
+           [userId]
+         );
+
+         if (setupResult.rows.length === 0 || !setupResult.rows[0].waba_id || !setupResult.rows[0].phone_number_id) {
+           return res.status(400).json({
+             success: false,
+             message: 'WhatsApp setup not completed. Please complete WhatsApp Business setup with both WABA ID and Phone Number ID.',
+             code: 'WHATSAPP_SETUP_REQUIRED'
+           });
+         }
+
+         const wabaId = setupResult.rows[0].waba_id;
+         const phoneNumberId = setupResult.rows[0].phone_number_id;
+         const accessToken = env.INTERAKT_ACCESS_TOKEN;
+
+                console.log('Debug - WhatsApp Setup:', {
+           wabaId: wabaId,
+           phoneNumberId: phoneNumberId,
+           accessTokenExists: !!accessToken,
+           userId: userId
+         });
+
+             if (!accessToken) {
+         return res.status(500).json({
+           success: false,
+           message: 'Server configuration error: Interakt access token not configured'
+         });
+       }
+
+       // Validate WABA ID and Phone Number ID format
+       if (!wabaId || typeof wabaId !== 'string' || wabaId.length < 10) {
+         return res.status(400).json({
+           success: false,
+           message: 'Invalid WABA ID format. Please check your WhatsApp Business setup.',
+           wabaId: wabaId
+         });
+       }
+
+       if (!phoneNumberId || typeof phoneNumberId !== 'string' || phoneNumberId.length < 5) {
+         return res.status(400).json({
+           success: false,
+           message: 'Invalid Phone Number ID format. Please check your WhatsApp Business setup.',
+           phoneNumberId: phoneNumberId
+         });
+       }
+
+      // Verify campaign exists and belongs to user
+      const campaignResult = await client.query(
+        'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
+        [body.campaignId, userId]
+      );
+
+      if (campaignResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Campaign not found'
+        });
+      }
+
+      const campaign = campaignResult.rows[0];
+
+             // Use the original template name as provided by the user
+       // Interakt expects the exact template name as it appears in their system
+       const templateName = body.templateName;
+
+       // First, let's check the template status from Interakt
+       console.log('Debug - Checking template status for:', templateName);
+       try {
+         const templateCheckResponse = await fetch(
+           `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/message_templates`,
+           {
+             method: 'GET',
+             headers: {
+               'x-access-token': accessToken,
+               'x-waba-id': wabaId,
+               'Content-Type': 'application/json'
+             }
+           }
+         );
+
+         if (templateCheckResponse.ok) {
+           const templateData = await templateCheckResponse.json();
+           console.log('Debug - Available templates:', JSON.stringify(templateData, null, 2));
+           
+           // Find our specific template
+           const ourTemplate = templateData.data?.find((t: any) => t.name === templateName);
+           if (ourTemplate) {
+             console.log('Debug - Our template status:', {
+               name: ourTemplate.name,
+               status: ourTemplate.status,
+               category: ourTemplate.category,
+               language: ourTemplate.language
+             });
+           } else {
+             console.log('Debug - Template not found in available templates');
+           }
+         } else {
+           console.log('Debug - Failed to fetch templates:', templateCheckResponse.status, templateCheckResponse.statusText);
+         }
+       } catch (error) {
+         console.log('Debug - Error checking template status:', error);
+       }
+
+      const results = [];
+      const messageLogs = [];
+
+             // Send messages to each contact
+       for (const contact of body.contacts) {
+         // Ensure phone number is in international format
+         let phoneNumber = contact.whatsappNumber;
+         if (!phoneNumber.startsWith('+')) {
+           // If it starts with country code (91), add +
+           if (phoneNumber.startsWith('91')) {
+             phoneNumber = '+' + phoneNumber;
+           } else {
+             // Assume it's an Indian number and add +91
+             phoneNumber = '+91' + phoneNumber;
+           }
+         }
+         
+         try {
+           
+                       // Prepare message payload for Interakt
+            const messagePayload = {
+              messaging_product: "whatsapp",
+              recipient_type: "individual",
+              to: phoneNumber,
+              type: "template",
+              template: {
+                name: templateName,
+                language: {
+                  code: body.languageCode.split('_')[0] // Convert 'en_US' to 'en'
+                }
+              }
+            };
+
+            // Alternative payload structure if the first one doesn't work
+            const alternativePayload = {
+              messaging_product: "whatsapp",
+              to: phoneNumber,
+              type: "template",
+              template: {
+                name: templateName,
+                language: {
+                  code: body.languageCode.split('_')[0]
+                }
+              }
+            };
+
+            console.log('Debug - Full message payload:', JSON.stringify(messagePayload, null, 2));
+
+          if (body.parameters && body.parameters.length > 0) {
+            (messagePayload.template as any).components = body.parameters;
+          }
+
+                                             // Call Interakt API to send template message
+            console.log('Debug - Sending to Interakt:', {
+              url: `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
+              payload: messagePayload,
+              templateName: templateName,
+              languageCode: body.languageCode,
+              languageCodeFormatted: body.languageCode.split('_')[0],
+              phoneNumberId: phoneNumberId,
+              wabaId: wabaId,
+              headers: {
+                'x-access-token': accessToken ? '***' : 'MISSING',
+                'x-waba-id': wabaId,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            const interaktResponse = await fetch(
+              `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
+              {
+                method: 'POST',
+                headers: {
+                  'x-access-token': accessToken,
+                  'x-waba-id': wabaId,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(messagePayload)
+              }
+            );
+
+                     console.log('Debug - Interakt Response:', {
+             status: interaktResponse.status,
+             statusText: interaktResponse.statusText,
+             headers: Object.fromEntries(interaktResponse.headers.entries())
+           });
+           
+                       let interaktData;
+            // Read response body only once
+            const responseText = await interaktResponse.text();
+            
+            try {
+              interaktData = JSON.parse(responseText);
+              console.log('Debug - Interakt Response Data:', interaktData);
+            } catch (parseError) {
+              // If response is not JSON, use the text content
+              console.log('Debug - Interakt Error Text:', responseText);
+              interaktData = { error: responseText };
+            }
+
+                       if (interaktResponse.ok && !interaktData.error) {
+              // Success - log message
+              const messageId = interaktData.messages?.[0]?.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              
+              console.log('Debug - Message sent successfully, checking delivery status for:', messageId);
+              
+              // Check message delivery status after a short delay
+              setTimeout(async () => {
+                try {
+                  const statusResponse = await fetch(
+                    `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages/${messageId}`,
+                    {
+                      method: 'GET',
+                      headers: {
+                        'x-access-token': accessToken,
+                        'x-waba-id': wabaId,
+                        'Content-Type': 'application/json'
+                      }
+                    }
+                  );
+                  
+                  if (statusResponse.ok) {
+                    const statusData = await statusResponse.json();
+                    console.log('Debug - Message delivery status:', JSON.stringify(statusData, null, 2));
+                  } else {
+                    console.log('Debug - Failed to check message status:', statusResponse.status);
+                  }
+                } catch (error) {
+                  console.log('Debug - Error checking message status:', error);
+                }
+              }, 5000); // Check after 5 seconds
+              
+              const messageLog = {
+                campaignId: body.campaignId,
+                to: phoneNumber,
+                templateName: body.templateName,
+                languageCode: body.languageCode,
+                messageId: messageId,
+                status: 'SENT',
+                sentAt: new Date().toISOString(),
+                userId: userId,
+                createdAt: new Date().toISOString()
+              };
+
+            messageLogs.push(messageLog);
+
+            results.push({
+              contactId: contact.id,
+              status: 'success',
+              messageId: messageLog.messageId,
+              interaktResponse: interaktData
+            });
+          } else {
+                         // Failed - log error
+             const messageLog = {
+               campaignId: body.campaignId,
+               to: phoneNumber,
+               templateName: body.templateName,
+               languageCode: body.languageCode,
+               messageId: `failed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+               status: 'FAILED',
+               failedAt: new Date().toISOString(),
+               errorMessage: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
+               userId: userId,
+               createdAt: new Date().toISOString()
+             };
+
+            messageLogs.push(messageLog);
+
+            results.push({
+              contactId: contact.id,
+              status: 'failed',
+              error: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
+              interaktResponse: interaktData
+            });
+          }
+
+        } catch (error: any) {
+                     // Individual contact error
+           const messageLog = {
+             campaignId: body.campaignId,
+             to: phoneNumber,
+             templateName: body.templateName,
+             languageCode: body.languageCode,
+             messageId: `error-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+             status: 'FAILED',
+             failedAt: new Date().toISOString(),
+             errorMessage: error.message || 'Unknown error',
+             userId: userId,
+             createdAt: new Date().toISOString()
+           };
+
+          messageLogs.push(messageLog);
+
+          results.push({
+            contactId: contact.id,
+            status: 'failed',
+            error: error.message || 'Unknown error'
+          });
+        }
+      }
+
+      // Insert message logs into database
+      if (messageLogs.length > 0) {
+        const values = messageLogs.map((log, index) => {
+          const offset = index * 8;
+          return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8})`;
+        }).join(', ');
+
+        const flatValues = messageLogs.flatMap(log => [
+          log.campaignId,
+          log.to,
+          log.templateName,
+          log.languageCode,
+          log.messageId,
+          log.status,
+          log.sentAt || log.failedAt || log.createdAt,
+          log.userId
+        ]);
+
+        await client.query(
+          `INSERT INTO message_logs (
+            campaign_id, to_number, template_name, language_code, 
+            message_id, status, sent_at, user_id
+          ) VALUES ${values}`,
+          flatValues
+        );
+      }
+
+      // Update campaign status if all messages sent
+      const successCount = results.filter(r => r.status === 'success').length;
+      const totalCount = results.length;
+
+      if (successCount === totalCount) {
+        await client.query(
+          'UPDATE campaigns SET status = $1, completed_at = NOW() WHERE id = $2',
+          ['COMPLETED', body.campaignId]
+        );
+      } else if (successCount > 0) {
+        await client.query(
+          'UPDATE campaigns SET status = $1 WHERE id = $2',
+          ['PARTIALLY_COMPLETED', body.campaignId]
+        );
+      } else {
+        await client.query(
+          'UPDATE campaigns SET status = $1 WHERE id = $2',
+          ['FAILED', body.campaignId]
+        );
+      }
+
+      res.json({
+        success: true,
+        data: {
+          campaignId: body.campaignId,
+          totalContacts: totalCount,
+          successCount: successCount,
+          failedCount: totalCount - successCount,
+          results: results
+        },
+        message: `Campaign executed: ${successCount}/${totalCount} messages sent successfully`
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error: any) {
+    console.error('Error sending template messages:', error);
+    
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid request data',
+        errors: error.errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while sending template messages',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/send-template/campaigns:
+ *   get:
+ *     tags:
+ *       - Send Template
+ *     summary: Get user's campaigns
+ *     description: Retrieves all campaigns for the authenticated user
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *         description: Filter by campaign status
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *         description: Number of campaigns to return
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *         description: Page number for pagination
+ *     responses:
+ *       200:
+ *         description: Campaigns retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+// GET /api/send-template/campaigns - Get user's campaigns
+router.get("/campaigns", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
+
+    const querySchema = z.object({
+      status: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(25),
+      page: z.coerce.number().int().min(1).default(1),
+    });
+
+    const query = querySchema.parse(req.query);
+    const offset = (query.page - 1) * query.limit;
+
+    const client = await pool.connect();
+    try {
+      let whereClause = 'WHERE user_id = $1';
+      let params = [userId];
+      let paramIndex = 1;
+
+      if (query.status && query.status !== 'all') {
+        paramIndex++;
+        whereClause += ` AND status = $${paramIndex}`;
+        params.push(query.status.toUpperCase());
+      }
+
+      // Get campaigns with pagination
+      const campaignsResult = await client.query(
+        `SELECT * FROM campaigns ${whereClause} 
+         ORDER BY created_at DESC 
+         LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}`,
+        [...params, query.limit, offset]
+      );
+
+      // Get total count
+      const countResult = await client.query(
+        `SELECT COUNT(*) as total FROM campaigns ${whereClause}`,
+        params
+      );
+
+      const total = parseInt(countResult.rows[0].total);
+
+      // Transform campaigns to match frontend format
+      const campaigns = campaignsResult.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        type: row.trigger_type === 'IMMEDIATE' ? 'IMMEDIATE' : 'SCHEDULED',
+        status: row.status,
+        receiverCount: row.audience_size,
+        messageCount: 1, // Each campaign sends one message type
+        createdOn: new Date(row.created_at).toLocaleDateString('en-US', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        }),
+        scheduledFor: row.scheduled_at 
+          ? new Date(row.scheduled_at).toLocaleDateString('en-US', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          : row.trigger_type === 'IMMEDIATE' ? 'Immediate' : 'Not scheduled',
+        processedOn: row.processed_at 
+          ? new Date(row.processed_at).toLocaleDateString('en-US', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          : undefined,
+        completedOn: row.completed_at
+          ? new Date(row.completed_at).toLocaleDateString('en-US', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          : undefined,
+        deliveryRate: 0, // Will be calculated from message logs
+        openRate: 0, // Will be calculated from message logs
+      }));
+
+      // Calculate delivery and open rates for completed campaigns
+      for (const campaign of campaigns) {
+        if (campaign.status === 'COMPLETED' || campaign.status === 'PARTIALLY_COMPLETED') {
+          const statsResult = await client.query(
+            `SELECT 
+               COUNT(*) as total,
+               COUNT(CASE WHEN status = 'SENT' OR status = 'DELIVERED' OR status = 'READ' THEN 1 END) as delivered,
+               COUNT(CASE WHEN status = 'READ' THEN 1 END) as read
+             FROM message_logs 
+             WHERE campaign_id = $1`,
+            [campaign.id]
+          );
+
+          const stats = statsResult.rows[0];
+          if (stats.total > 0) {
+            campaign.deliveryRate = Math.round((stats.delivered / stats.total) * 100);
+            campaign.openRate = Math.round((stats.read / stats.total) * 100);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        data: campaigns,
+        pagination: {
+          page: query.page,
+          limit: query.limit,
+          total: total,
+          pages: Math.ceil(total / query.limit)
+        }
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error: any) {
+    console.error('Error fetching campaigns:', error);
+    
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid query parameters',
+        errors: error.errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while fetching campaigns',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/send-template/messages:
+ *   get:
+ *     tags:
+ *       - Send Template
+ *     summary: Get message logs
+ *     description: Retrieves message logs for the authenticated user
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search by phone number, message ID, or template name
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *         description: Number of messages to return
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *         description: Page number for pagination
+ *     responses:
+ *       200:
+ *         description: Message logs retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+// GET /api/send-template/messages - Get message logs
+router.get("/messages", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
+
+    const querySchema = z.object({
+      search: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+      page: z.coerce.number().int().min(1).default(1),
+    });
+
+    const query = querySchema.parse(req.query);
+    const offset = (query.page - 1) * query.limit;
+
+    const client = await pool.connect();
+    try {
+      let whereClause = 'WHERE user_id = $1';
+      let params = [userId];
+      let paramIndex = 1;
+
+      if (query.search) {
+        paramIndex++;
+        whereClause += ` AND (to_number ILIKE $${paramIndex} OR message_id ILIKE $${paramIndex} OR template_name ILIKE $${paramIndex})`;
+        params.push(`%${query.search}%`);
+      }
+
+      // Get message logs with pagination
+      const messagesResult = await client.query(
+        `SELECT * FROM message_logs ${whereClause} 
+         ORDER BY created_at DESC 
+         LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}`,
+        [...params, query.limit, offset]
+      );
+
+      // Get total count
+      const countResult = await client.query(
+        `SELECT COUNT(*) as total FROM message_logs ${whereClause}`,
+        params
+      );
+
+      const total = parseInt(countResult.rows[0].total);
+
+      // Transform messages to match frontend format
+      const messages = messagesResult.rows.map(row => ({
+        id: row.id,
+        created_at: row.created_at,
+        to_number: row.to_number,
+        message_type: `Template: ${row.template_name}`,
+        message_id: row.message_id,
+        status: row.status,
+        campaign_id: row.campaign_id,
+        template_name: row.template_name,
+        language_code: row.language_code,
+        sent_at: row.sent_at,
+        delivered_at: row.delivered_at,
+        read_at: row.read_at,
+        failed_at: row.failed_at,
+        error_message: row.error_message
+      }));
+
+      res.json({
+        success: true,
+        data: messages,
+        pagination: {
+          page: query.page,
+          limit: query.limit,
+          total: total,
+          pages: Math.ceil(total / query.limit)
+        }
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error: any) {
+    console.error('Error fetching message logs:', error);
+    
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid query parameters',
+        errors: error.errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while fetching message logs',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/send-template/campaigns/{id}/status:
+ *   get:
+ *     tags:
+ *       - Send Template
+ *     summary: Get campaign status
+ *     description: Retrieves detailed status and statistics for a specific campaign
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Campaign ID
+ *     responses:
+ *       200:
+ *         description: Campaign status retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Campaign not found
+ *       500:
+ *         description: Internal server error
+ */
+// GET /api/send-template/campaigns/:id/status - Get campaign status
+router.get("/campaigns/:id/status", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Authentication required' 
+      });
+    }
+
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+
+    const client = await pool.connect();
+    try {
+      // Get campaign details
+      const campaignResult = await client.query(
+        'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
+        [id, userId]
+      );
+
+      if (campaignResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Campaign not found'
+        });
+      }
+
+      const campaign = campaignResult.rows[0];
+
+      // Get message statistics
+      const statsResult = await client.query(
+        `SELECT 
+           COUNT(*) as total,
+           COUNT(CASE WHEN status = 'SENT' THEN 1 END) as sent,
+           COUNT(CASE WHEN status = 'DELIVERED' THEN 1 END) as delivered,
+           COUNT(CASE WHEN status = 'READ' THEN 1 END) as read,
+           COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed,
+           COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending
+         FROM message_logs 
+         WHERE campaign_id = $1`,
+        [id]
+      );
+
+      const stats = statsResult.rows[0];
+      const total = parseInt(stats.total);
+      const sent = parseInt(stats.sent);
+      const delivered = parseInt(stats.delivered);
+      const read = parseInt(stats.read);
+      const failed = parseInt(stats.failed);
+      const pending = parseInt(stats.pending);
+
+      // Calculate progress percentage
+      let progress = 0;
+      if (total > 0) {
+        if (campaign.status === 'COMPLETED') {
+          progress = 100;
+        } else if (campaign.status === 'FAILED') {
+          progress = 0;
+        } else {
+          progress = Math.round(((sent + delivered + read + failed) / total) * 100);
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          id: campaign.id,
+          name: campaign.name,
+          status: campaign.status,
+          totalCount: total,
+          sentCount: sent,
+          deliveredCount: delivered,
+          readCount: read,
+          failedCount: failed,
+          pendingCount: pending,
+          progress: progress,
+          createdAt: campaign.created_at,
+          scheduledAt: campaign.scheduled_at,
+          processedAt: campaign.processed_at,
+          completedAt: campaign.completed_at
+        }
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error: any) {
+    console.error('Error fetching campaign status:', error);
+    
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid campaign ID',
+        errors: error.errors
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error while fetching campaign status',
+      error: error.message
+    });
+  }
+});
+
+export default router;

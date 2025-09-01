@@ -545,4 +545,79 @@ router.get('/setup-status', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/whatsapp/update-setup-status:
+ *   post:
+ *     summary: Update user's WhatsApp setup status
+ *     tags: [WhatsApp]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 description: New status to set
+ *               wallet_verified:
+ *                 type: boolean
+ *                 description: Whether wallet is verified
+ *     responses:
+ *       200:
+ *         description: Setup status updated successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/update-setup-status', authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    const { status, wallet_verified } = req.body;
+
+    // Check if whatsapp_setups record exists, if not create one
+    const setupCheck = await pool.query(`
+      SELECT id FROM whatsapp_setups WHERE user_id = $1
+    `, [userId]);
+
+    if (setupCheck.rows.length === 0) {
+      // Create a new whatsapp_setups record
+      await pool.query(`
+        INSERT INTO whatsapp_setups (user_id, status, created_at, updated_at)
+        VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [userId, status || 'not_started']);
+    } else {
+      // Update existing record
+      await pool.query(`
+        UPDATE whatsapp_setups 
+        SET status = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $2
+      `, [status, userId]);
+    }
+
+    res.json({
+      success: true,
+      message: 'Setup status updated successfully',
+      data: {
+        status: status,
+        wallet_verified: wallet_verified
+      }
+    });
+  } catch (error) {
+    console.error('Error updating setup status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
 export default router;
