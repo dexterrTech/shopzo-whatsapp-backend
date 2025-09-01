@@ -12,7 +12,7 @@ const EnvSchema = z.object({
   INTERAKT_WABA_ID: z.string().default("dev_waba_id"),
   INTERAKT_ACCESS_TOKEN: z.string().default("dev_access_token"),
   INTERAKT_PHONE_NUMBER_ID: z.string().default("dev_phone_number_id"),
-  INTERAKT_SOLUTION_ID: z.string().default("1985687578474211"),
+  INTERAKT_SOLUTION_ID: z.string().default("1101161528613698"),
 
   // API Base URLs
   FACEBOOK_GRAPH_API_BASE_URL: z.string().default("https://graph.facebook.com"),
@@ -48,7 +48,7 @@ const EnvSchema = z.object({
     .transform((v) => (v ? v.toLowerCase() === "true" : true)),
   
   // API Versions
-  FACEBOOK_API_VERSION: z.string().default("v21.0"),
+  FACEBOOK_API_VERSION: z.string().default("v18.0"),
   INTERAKT_API_VERSION: z.string().default("v1"),
   
   // JWT Configuration
