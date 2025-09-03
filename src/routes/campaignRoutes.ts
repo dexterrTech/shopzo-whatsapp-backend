@@ -4,6 +4,8 @@ import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
 import { ContactService } from "../services/contactService";
 import { authenticateToken } from "../middleware/authMiddleware";
+import { upsertBillingLog, holdWalletInSuspenseForBilling } from "../services/billingService";
+import { pool } from "../config/database";
 
 const router = Router();
 
@@ -216,9 +218,10 @@ router.get("/export", authenticateToken, async (req, res, next) => {
 // POST /api/campaigns/send-template
 router.post("/send-template", authenticateToken, async (req, res, next) => {
   try {
+    const userId = req.user!.userId;
     const bodySchema = z.object({
       templateId: z.string(),
-      contactIds: z.array(z.string()),
+      phoneNumbers: z.array(z.string()), // Changed from contactIds to phoneNumbers
       parameters: z.record(z.string(), z.string()).optional(),
     });
 
@@ -242,15 +245,6 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
       }),
     });
 
-    // Resolve contacts
-    const contacts = await Promise.all(
-      body.contactIds.map(async (id) => {
-        const numericId = Number(id);
-        if (!Number.isFinite(numericId)) return null;
-        return await ContactService.getContactById(numericId);
-      })
-    );
-
     // Prepare parameter mapping (POSITIONAL only)
     const paramValues: string[] | undefined = body.parameters
       ? Object.keys(body.parameters)
@@ -259,9 +253,15 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
       : undefined;
 
     const sendResults = await Promise.allSettled(
-      contacts.map(async (contact) => {
-        if (!contact || !contact.whatsapp_number) {
-          throw new Error("Missing contact or whatsapp_number");
+      body.phoneNumbers.map(async (phoneNumber) => {
+        // Ensure phone number is in international format
+        let formattedPhoneNumber = phoneNumber;
+        if (!formattedPhoneNumber.startsWith('+')) {
+          if (formattedPhoneNumber.startsWith('91')) {
+            formattedPhoneNumber = '+' + formattedPhoneNumber;
+          } else {
+            formattedPhoneNumber = '+91' + formattedPhoneNumber;
+          }
         }
 
         const components = paramValues && paramValues.length > 0
@@ -276,7 +276,7 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
         const payload: any = {
           messaging_product: "whatsapp",
           recipient_type: "individual",
-          to: contact.whatsapp_number,
+          to: formattedPhoneNumber,
           type: "template",
           template: {
             name: template.name,
@@ -297,14 +297,45 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
         });
 
         const msgId = resp?.messages?.[0]?.id ?? "unknown";
-        return msgId;
+
+        // Create billing log and hold funds in suspense for each message sent
+        try {
+          // Determine category from template metadata/name
+          let category: 'utility' | 'marketing' | 'authentication' | 'service' = 'utility';
+          const tplCat = String((template as any).category || '').toLowerCase();
+          const tplName = String((template as any).name || '').toLowerCase();
+          if (tplCat.includes('market') || tplName.includes('market') || tplName.includes('promo')) category = 'marketing';
+          else if (tplCat.includes('auth') || tplName.includes('auth')) category = 'authentication';
+          else if (tplCat.includes('service') || tplName.includes('service')) category = 'service';
+
+          const ins = await upsertBillingLog({
+            userId,
+            conversationId: msgId,
+            category,
+            recipientNumber: formattedPhoneNumber,
+            startTime: new Date(),
+            endTime: new Date(),
+            billingStatus: 'pending',
+          });
+          if (ins) {
+            const amtRes = await pool.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+            const row = amtRes.rows[0];
+            if (row) {
+              await holdWalletInSuspenseForBilling({ userId, conversationId: msgId, amountPaise: row.amount_paise, currency: row.amount_currency });
+            }
+          }
+        } catch (e) {
+          console.warn('Campaign billing hold failed for message', msgId, e);
+        }
+
+        return { phoneNumber: formattedPhoneNumber, messageId: msgId };
       })
     );
 
     const messageIds: string[] = [];
     let failedCount = 0;
     sendResults.forEach((r) => {
-      if (r.status === "fulfilled") messageIds.push(r.value);
+      if (r.status === "fulfilled") messageIds.push(r.value.messageId);
       else failedCount += 1;
     });
 
@@ -312,7 +343,7 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
       success: failedCount === 0,
       messageIds,
       failedCount,
-      totalSent: contacts.length,
+      totalSent: body.phoneNumbers.length,
     });
   } catch (err) {
     next(err);

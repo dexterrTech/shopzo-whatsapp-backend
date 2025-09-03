@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticateToken } from "../middleware/authMiddleware";
 import { pool } from "../config/database";
+import { upsertBillingLog, holdWalletInSuspenseForBilling } from "../services/billingService";
 import { env } from "../config/env";
 
 const router = Router();
@@ -291,10 +292,7 @@ router.post("/send", authenticateToken, async (req, res) => {
 
     const bodySchema = z.object({
       campaignId: z.string(),
-      contacts: z.array(z.object({
-        id: z.string(),
-        whatsappNumber: z.string()
-      })),
+      phoneNumbers: z.array(z.string()), // Changed from contacts to phoneNumbers
       templateName: z.string(),
       languageCode: z.string().min(2).max(5),
       parameters: z.array(z.any()).optional(),
@@ -414,44 +412,31 @@ router.post("/send", authenticateToken, async (req, res) => {
       const messageLogs = [];
 
              // Send messages to each contact
-       for (const contact of body.contacts) {
+       for (const phoneNumber of body.phoneNumbers) {
          // Ensure phone number is in international format
-         let phoneNumber = contact.whatsappNumber;
-         if (!phoneNumber.startsWith('+')) {
+         let formattedPhoneNumber = phoneNumber;
+         if (!formattedPhoneNumber.startsWith('+')) {
            // If it starts with country code (91), add +
-           if (phoneNumber.startsWith('91')) {
-             phoneNumber = '+' + phoneNumber;
+           if (formattedPhoneNumber.startsWith('91')) {
+             formattedPhoneNumber = '+' + formattedPhoneNumber;
            } else {
              // Assume it's an Indian number and add +91
-             phoneNumber = '+91' + phoneNumber;
+             formattedPhoneNumber = '+91' + formattedPhoneNumber;
            }
          }
          
          try {
            
-                       // Prepare message payload for Interakt
+                       // Prepare message payload for Interakt - using exact format from user
             const messagePayload = {
               messaging_product: "whatsapp",
               recipient_type: "individual",
-              to: phoneNumber,
+              to: formattedPhoneNumber,
               type: "template",
               template: {
                 name: templateName,
                 language: {
                   code: body.languageCode.split('_')[0] // Convert 'en_US' to 'en'
-                }
-              }
-            };
-
-            // Alternative payload structure if the first one doesn't work
-            const alternativePayload = {
-              messaging_product: "whatsapp",
-              to: phoneNumber,
-              type: "template",
-              template: {
-                name: templateName,
-                language: {
-                  code: body.languageCode.split('_')[0]
                 }
               }
             };
@@ -544,7 +529,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               
               const messageLog = {
                 campaignId: body.campaignId,
-                to: phoneNumber,
+                to: formattedPhoneNumber,
                 templateName: body.templateName,
                 languageCode: body.languageCode,
                 messageId: messageId,
@@ -552,12 +537,43 @@ router.post("/send", authenticateToken, async (req, res) => {
                 sentAt: new Date().toISOString(),
                 userId: userId,
                 createdAt: new Date().toISOString()
-              };
+              } as any;
 
             messageLogs.push(messageLog);
 
+            // Billing: upsert billing log and hold funds in suspense for this message
+            try {
+              let category: 'utility' | 'marketing' | 'authentication' | 'service' = 'utility';
+              const tn = String(body.templateName || '').toLowerCase();
+              if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
+              else if (tn.includes('auth')) category = 'authentication';
+              else if (tn.includes('service')) category = 'service';
+
+              const ins = await upsertBillingLog({
+                userId,
+                conversationId: messageId,
+                category,
+                recipientNumber: formattedPhoneNumber,
+                startTime: new Date(),
+                endTime: new Date(),
+                billingStatus: 'pending',
+              });
+              console.log('Billing: upsertBillingLog success path result:', ins);
+              if (ins) {
+                const amtRes = await client.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+                const row = amtRes.rows[0];
+                console.log('Billing: fetched amount for hold (success path):', row);
+                if (row) {
+                  await holdWalletInSuspenseForBilling({ userId, conversationId: messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                  console.log('Billing: holdWalletInSuspenseForBilling done (success path)');
+                }
+              }
+            } catch (e) {
+              console.warn('Billing hold failed (success path):', e);
+            }
+
             results.push({
-              contactId: contact.id,
+              contactId: phoneNumber, // Store the original phone number as contactId
               status: 'success',
               messageId: messageLog.messageId,
               interaktResponse: interaktData
@@ -566,7 +582,7 @@ router.post("/send", authenticateToken, async (req, res) => {
                          // Failed - log error
              const messageLog = {
                campaignId: body.campaignId,
-               to: phoneNumber,
+               to: formattedPhoneNumber,
                templateName: body.templateName,
                languageCode: body.languageCode,
                messageId: `failed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -579,8 +595,39 @@ router.post("/send", authenticateToken, async (req, res) => {
 
             messageLogs.push(messageLog);
 
+            // Billing: hold funds even if failed (charged on attempts)
+            try {
+              let category: 'utility' | 'marketing' | 'authentication' | 'service' = 'utility';
+              const tn = String(body.templateName || '').toLowerCase();
+              if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
+              else if (tn.includes('auth')) category = 'authentication';
+              else if (tn.includes('service')) category = 'service';
+
+              const ins = await upsertBillingLog({
+                userId,
+                conversationId: (messageLog as any).messageId,
+                category,
+                recipientNumber: formattedPhoneNumber,
+                startTime: new Date(),
+                endTime: new Date(),
+                billingStatus: 'pending',
+              });
+              console.log('Billing: upsertBillingLog failure path result:', ins);
+              if (ins) {
+                const amtRes = await client.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+                const row = amtRes.rows[0];
+                console.log('Billing: fetched amount for hold (failure path):', row);
+                if (row) {
+                  await holdWalletInSuspenseForBilling({ userId, conversationId: (messageLog as any).messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                  console.log('Billing: holdWalletInSuspenseForBilling done (failure path)');
+                }
+              }
+            } catch (e) {
+              console.warn('Billing hold failed (failure path):', e);
+            }
+
             results.push({
-              contactId: contact.id,
+              contactId: phoneNumber, // Store the original phone number as contactId
               status: 'failed',
               error: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
               interaktResponse: interaktData
@@ -591,7 +638,7 @@ router.post("/send", authenticateToken, async (req, res) => {
                      // Individual contact error
            const messageLog = {
              campaignId: body.campaignId,
-             to: phoneNumber,
+             to: formattedPhoneNumber,
              templateName: body.templateName,
              languageCode: body.languageCode,
              messageId: `error-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -604,8 +651,39 @@ router.post("/send", authenticateToken, async (req, res) => {
 
           messageLogs.push(messageLog);
 
+          // Billing: hold funds for attempted send when exception occurs
+          try {
+            let category: 'utility' | 'marketing' | 'authentication' | 'service' = 'utility';
+            const tn = String(body.templateName || '').toLowerCase();
+            if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
+            else if (tn.includes('auth')) category = 'authentication';
+            else if (tn.includes('service')) category = 'service';
+
+            const ins = await upsertBillingLog({
+              userId,
+              conversationId: (messageLog as any).messageId,
+              category,
+              recipientNumber: formattedPhoneNumber,
+              startTime: new Date(),
+              endTime: new Date(),
+              billingStatus: 'pending',
+            });
+            console.log('Billing: upsertBillingLog exception path result:', ins);
+            if (ins) {
+              const amtRes = await client.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+              const row = amtRes.rows[0];
+              console.log('Billing: fetched amount for hold (exception path):', row);
+              if (row) {
+                await holdWalletInSuspenseForBilling({ userId, conversationId: (messageLog as any).messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                console.log('Billing: holdWalletInSuspenseForBilling done (exception path)');
+              }
+            }
+          } catch (e) {
+            console.warn('Billing hold failed (exception path):', e);
+          }
+
           results.push({
-            contactId: contact.id,
+            contactId: phoneNumber, // Store the original phone number as contactId
             status: 'failed',
             error: error.message || 'Unknown error'
           });

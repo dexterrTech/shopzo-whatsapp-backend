@@ -327,6 +327,71 @@ router.put('/plans/:id', authenticateToken, requireSuperAdmin, async (req, res, 
   }
 });
 
+// Super admin: delete a plan
+/**
+ * @swagger
+ * /api/billing/plans/{id}:
+ *   delete:
+ *     summary: Delete a price plan (super admin)
+ *     tags: [Billing]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200: { description: Deleted }
+ */
+router.delete('/plans/:id', authenticateToken, async (req, res, next) => {
+  try {
+    const { id } = z.object({ id: z.coerce.number().int().positive() }).parse(req.params);
+    
+    if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+    const requester = req.user;
+    
+    // Check if plan exists
+    const planCheck = await pool.query(
+      'SELECT id, is_default, created_by FROM price_plans WHERE id = $1',
+      [id]
+    );
+    
+    if (planCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Plan not found' });
+    }
+    
+    const plan = planCheck.rows[0];
+    
+    // Super admins can delete any non-default plan
+    if (requester.role === 'super_admin') {
+      if (plan.is_default) {
+        return res.status(400).json({ success: false, message: 'Cannot delete default plan' });
+      }
+    } 
+    // Aggregators can only delete their own plans
+    else if (requester.role === 'aggregator') {
+      if (plan.created_by !== requester.userId) {
+        return res.status(403).json({ success: false, message: 'You can only delete your own plans' });
+      }
+      if (plan.is_default) {
+        return res.status(400).json({ success: false, message: 'Cannot delete default plan' });
+      }
+    } 
+    // Regular users cannot delete plans
+    else {
+      return res.status(403).json({ success: false, message: 'Insufficient permissions' });
+    }
+    
+    // Delete the plan
+    await pool.query('DELETE FROM price_plans WHERE id = $1', [id]);
+    
+    res.json({ success: true, message: 'Plan deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Super admin: set default plan
 /**
  * @swagger
@@ -439,6 +504,63 @@ router.get('/my-plans', authenticateToken, async (req, res, next) => {
       [ownerId]
     );
     res.json({ data: plans.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get base plans (for aggregators to see their assigned base plan)
+router.get('/base-plans', authenticateToken, async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+    
+    if (req.user.role === 'aggregator') {
+      // Get aggregator's assigned base plan
+      const basePlanRes = await pool.query(
+        `SELECT pp.*
+         FROM user_price_plans upp
+         JOIN price_plans pp ON pp.id = upp.price_plan_id
+         WHERE upp.user_id = $1
+         ORDER BY upp.effective_from DESC
+         LIMIT 1`,
+        [req.user.userId]
+      );
+      res.json({ data: basePlanRes.rows });
+    } else if (req.user.role === 'super_admin') {
+      // Super admin can see all default plans
+      const defaultPlans = await pool.query(
+        'SELECT * FROM price_plans WHERE is_default = true ORDER BY id ASC'
+      );
+      res.json({ data: defaultPlans.rows });
+    } else {
+      res.json({ data: [] });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Get available plans for assignment (aggregators can assign their created plans to businesses)
+router.get('/available-plans', authenticateToken, async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, message: 'Authentication required' });
+    
+    if (req.user.role === 'aggregator') {
+      // Aggregators can assign their own created plans
+      const plans = await pool.query(
+        'SELECT * FROM price_plans WHERE created_by = $1 ORDER BY id ASC',
+        [req.user.userId]
+      );
+      res.json({ data: plans.rows });
+    } else if (req.user.role === 'super_admin') {
+      // Super admin can assign any plan
+      const plans = await pool.query(
+        'SELECT * FROM price_plans ORDER BY id ASC'
+      );
+      res.json({ data: plans.rows });
+    } else {
+      res.json({ data: [] });
+    }
   } catch (err) {
     next(err);
   }
