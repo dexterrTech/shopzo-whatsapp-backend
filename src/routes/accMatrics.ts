@@ -4,8 +4,23 @@ import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
 import { authenticateToken } from "../middleware/authMiddleware";
+import { pool } from "../config/database";
 
 const router = Router();
+
+// Helper function to get user's WhatsApp setup
+async function getUserWhatsAppSetup(userId: number) {
+  const result = await pool.query(
+    'SELECT waba_id, phone_number_id FROM whatsapp_setups WHERE user_id = $1 AND waba_id IS NOT NULL AND phone_number_id IS NOT NULL',
+    [userId]
+  );
+  
+  if (result.rows.length === 0) {
+    throw new Error('WhatsApp setup not completed. Please complete WhatsApp Business setup first.');
+  }
+  
+  return result.rows[0];
+}
 
 /**
  * @openapi
@@ -107,6 +122,14 @@ const router = Router();
 // GET /api/acc-matrics/message-analytics
 router.get("/message-analytics", authenticateToken, async (req, res, next) => {
   try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    // Get user's WhatsApp setup
+    const userSetup = await getUserWhatsAppSetup(userId);
+
     const querySchema = z.object({
       start: z.coerce.number(),
       end: z.coerce.number(),
@@ -154,11 +177,11 @@ router.get("/message-analytics", authenticateToken, async (req, res, next) => {
     const data = await withFallback({
       feature: "getMessageAnalytics",
       attempt: async () => {
-        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_WABA_ID}?fields=${encodeURIComponent(fields)}`, {
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${userSetup.waba_id}?fields=${encodeURIComponent(fields)}`, {
           method: 'GET',
           headers: {
             'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'x-waba-id': userSetup.waba_id,
             'Content-Type': 'application/json'
           }
         });
@@ -171,7 +194,7 @@ router.get("/message-analytics", authenticateToken, async (req, res, next) => {
       },
       fallback: () => ({
         analytics: {
-          phone_numbers: ["912240289385"],
+          phone_numbers: [userSetup.phone_number_id],
           granularity: query.granularity,
           data_points: [
             {
@@ -188,7 +211,7 @@ router.get("/message-analytics", authenticateToken, async (req, res, next) => {
             }
           ]
         },
-        id: env.INTERAKT_WABA_ID || "mock-waba-id",
+        id: userSetup.waba_id,
         fallback: true
       })
     });
@@ -328,16 +351,66 @@ router.get("/message-analytics", authenticateToken, async (req, res, next) => {
 // GET /api/acc-matrics/conversation-analytics
 router.get("/conversation-analytics", authenticateToken, async (req, res, next) => {
   try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    // Get user's WhatsApp setup
+    const userSetup = await getUserWhatsAppSetup(userId);
+
     const querySchema = z.object({
       start: z.coerce.number(),
       end: z.coerce.number(),
       granularity: z.enum(["HALF_HOUR", "DAILY", "MONTHLY"]),
-      phone_numbers: z.array(z.string()).optional(),
-      metric_types: z.array(z.enum(["COST", "CONVERSATION"])).optional(),
-      conversation_categories: z.array(z.enum(["AUTHENTICATION", "MARKETING", "SERVICE", "UTILITY"])).optional(),
-      conversation_types: z.array(z.enum(["FREE_ENTRY", "FREE_TIER", "REGULAR"])).optional(),
-      conversation_directions: z.array(z.enum(["BUSINESS_INITIATED", "USER_INITIATED"])).optional(),
-      dimensions: z.array(z.enum(["CONVERSATION_CATEGORY", "CONVERSATION_DIRECTION", "CONVERSATION_TYPE", "COUNTRY", "PHONE"])).optional(),
+      // Accept single value or repeated keys; coerce to array of strings
+      phone_numbers: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.string()).optional()),
+      // Accept single value or repeated keys; coerce to array of strings
+      metric_types: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.enum(["COST", "CONVERSATION"])).optional()),
+      // Accept single value or repeated keys; coerce to array of strings
+      conversation_categories: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.enum(["AUTHENTICATION", "MARKETING", "SERVICE", "UTILITY"])).optional()),
+      // Accept single value or repeated keys; coerce to array of strings
+      conversation_types: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.enum(["FREE_ENTRY", "FREE_TIER", "REGULAR"])).optional()),
+      // Accept single value or repeated keys; coerce to array of strings
+      conversation_directions: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.enum(["BUSINESS_INITIATED", "USER_INITIATED"])).optional()),
+      // Accept single value or repeated keys; coerce to array of strings
+      dimensions: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.enum(["CONVERSATION_CATEGORY", "CONVERSATION_DIRECTION", "CONVERSATION_TYPE", "COUNTRY", "PHONE"])).optional()),
     });
 
     const query = querySchema.parse(req.query);
@@ -372,11 +445,11 @@ router.get("/conversation-analytics", authenticateToken, async (req, res, next) 
     const data = await withFallback({
       feature: "getConversationAnalytics",
       attempt: async () => {
-        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_WABA_ID}?fields=${encodeURIComponent(fields)}`, {
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${userSetup.waba_id}?fields=${encodeURIComponent(fields)}`, {
           method: 'GET',
           headers: {
             'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'x-waba-id': userSetup.waba_id,
             'Content-Type': 'application/json'
           }
         });
@@ -396,7 +469,7 @@ router.get("/conversation-analytics", authenticateToken, async (req, res, next) 
                   start: query.start,
                   end: query.start + 2592000,
                   conversation: 1,
-                  phone_number: "912240289385",
+                  phone_number: userSetup.phone_number_id,
                   country: "KW",
                   conversation_type: "REGULAR",
                   conversation_category: "MARKETING",
@@ -406,7 +479,7 @@ router.get("/conversation-analytics", authenticateToken, async (req, res, next) 
             }
           ]
         },
-        id: env.INTERAKT_WABA_ID || "mock-waba-id",
+        id: userSetup.waba_id,
         fallback: true
       })
     });
@@ -441,14 +514,22 @@ router.get("/conversation-analytics", authenticateToken, async (req, res, next) 
 // POST /api/acc-matrics/enable-template-analytics
 router.post("/enable-template-analytics", authenticateToken, async (req, res, next) => {
   try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    // Get user's WhatsApp setup
+    const userSetup = await getUserWhatsAppSetup(userId);
+
     const data = await withFallback({
       feature: "enableTemplateAnalytics",
       attempt: async () => {
-        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_WABA_ID}?is_enabled_for_insights=true`, {
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${userSetup.waba_id}?is_enabled_for_insights=true`, {
           method: 'POST',
           headers: {
             'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'x-waba-id': userSetup.waba_id,
             'Content-Type': 'application/json'
           }
         });
@@ -460,7 +541,7 @@ router.post("/enable-template-analytics", authenticateToken, async (req, res, ne
         return await response.json();
       },
       fallback: () => ({
-        id: env.INTERAKT_WABA_ID || "mock-waba-id",
+        id: userSetup.waba_id,
         fallback: true
       })
     });
@@ -579,12 +660,34 @@ router.post("/enable-template-analytics", authenticateToken, async (req, res, ne
 // GET /api/acc-matrics/template-analytics
 router.get("/template-analytics", authenticateToken, async (req, res, next) => {
   try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    // Get user's WhatsApp setup
+    const userSetup = await getUserWhatsAppSetup(userId);
+
     const querySchema = z.object({
       start: z.coerce.number(),
       end: z.coerce.number(),
       granularity: z.enum(["DAILY"]),
-      template_ids: z.array(z.string()).min(1).max(10),
-      metric_types: z.array(z.enum(["SENT", "DELIVERED", "READ", "CLICKED"])).optional(),
+      // Accept single value or repeated keys; coerce to array of strings
+      template_ids: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.string()).min(1).max(10)),
+      // Accept single value or repeated keys; coerce to array of strings
+      metric_types: z
+        .preprocess((v) => {
+          if (v === undefined) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") return [v];
+          return v;
+        }, z.array(z.enum(["SENT", "DELIVERED", "READ", "CLICKED"])).optional()),
     });
 
     const query = querySchema.parse(req.query);
@@ -599,11 +702,11 @@ router.get("/template-analytics", authenticateToken, async (req, res, next) => {
     const data = await withFallback({
       feature: "getTemplateAnalytics",
       attempt: async () => {
-        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_WABA_ID}?fields=${encodeURIComponent(fields)}`, {
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${userSetup.waba_id}?fields=${encodeURIComponent(fields)}`, {
           method: 'GET',
           headers: {
             'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'x-waba-id': userSetup.waba_id,
             'Content-Type': 'application/json'
           }
         });
@@ -718,6 +821,14 @@ router.get("/template-analytics", authenticateToken, async (req, res, next) => {
 // GET /api/acc-matrics/analytics-summary
 router.get("/analytics-summary", authenticateToken, async (req, res, next) => {
   try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    // Get user's WhatsApp setup
+    const userSetup = await getUserWhatsAppSetup(userId);
+
     const querySchema = z.object({
       start: z.coerce.number(),
       end: z.coerce.number(),
@@ -730,22 +841,22 @@ router.get("/analytics-summary", authenticateToken, async (req, res, next) => {
       attempt: async () => {
         // Get message analytics
         const messageFields = `analytics.start(${query.start}).end(${query.end}).granularity(MONTH)`;
-        const messageResponse = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_WABA_ID}?fields=${encodeURIComponent(messageFields)}`, {
+        const messageResponse = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${userSetup.waba_id}?fields=${encodeURIComponent(messageFields)}`, {
           method: 'GET',
           headers: {
             'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'x-waba-id': userSetup.waba_id,
             'Content-Type': 'application/json'
           }
         });
 
         // Get conversation analytics
         const conversationFields = `conversation_analytics.start(${query.start}).end(${query.end}).granularity(MONTHLY)`;
-        const conversationResponse = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${env.INTERAKT_WABA_ID}?fields=${encodeURIComponent(conversationFields)}`, {
+        const conversationResponse = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/${userSetup.waba_id}?fields=${encodeURIComponent(conversationFields)}`, {
           method: 'GET',
           headers: {
             'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
-            'x-waba-id': env.INTERAKT_WABA_ID || '',
+            'x-waba-id': userSetup.waba_id,
             'Content-Type': 'application/json'
           }
         });

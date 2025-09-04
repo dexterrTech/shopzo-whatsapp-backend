@@ -83,6 +83,19 @@ app.get("/api/interaktWebhook", (req, res) => {
   return res.status(200).send("OK");
 });
 
+// Mirror POST webhook on the same direct path so external services can POST here
+// This simply logs the payload and returns 200. The full-feature handler also exists at
+// /api/interakt/interaktWebhook inside interaktRoutes.
+app.post("/api/interaktWebhook", (req, res) => {
+  try {
+    console.log("Direct webhook received (POST /api/interaktWebhook):", JSON.stringify(req.body, null, 2));
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error("Direct webhook handler error:", e);
+    return res.sendStatus(500);
+  }
+});
+
 // Global auth gate: require JWT for all routes except allowlist
 app.use((req, res, next) => {
   const allowlist: RegExp[] = [
