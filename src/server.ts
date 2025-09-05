@@ -59,6 +59,41 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString(), path: "/api/health" });
 });
 
+// Test endpoint to check webhook data (no auth required)
+app.get("/api/webhook-test", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id, 
+        webhook_type, 
+        http_method, 
+        request_url, 
+        query_params, 
+        body_data, 
+        response_status, 
+        created_at,
+        event_type,
+        phone_number_id,
+        waba_id,
+        message_id
+      FROM webhook_logs 
+      ORDER BY created_at DESC 
+      LIMIT 10
+    `);
+    
+    res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Test route to verify API is working
 app.get("/api/test", (_req, res) => {
   res.json({ 
@@ -284,6 +319,7 @@ app.use((req, res, next) => {
   const allowlist: RegExp[] = [
     /^\/health$/,
     /^\/api\/health$/,
+    /^\/api\/webhook-test$/, // Added webhook test endpoint
     /^\/api\/test$/,
     /^\/docs(\.json)?$/,
     /^\/docs\/?/,
