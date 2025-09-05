@@ -24,6 +24,7 @@ import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/spec";
 import { initDatabase } from "./config/database";
 import { authenticateToken } from "./middleware/authMiddleware";
+import { WebhookLoggingService } from "./services/webhookLoggingService";
 
 const app = express();
 
@@ -83,6 +84,107 @@ app.get("/api/interaktWebhook", (req, res) => {
     return res.status(200).send(challenge as any);
   }
   return res.status(200).send("OK");
+});
+
+// Facebook webhook verification endpoint
+app.get("/api/facebookWebhook", async (req, res) => {
+  const startTime = Date.now();
+  const mode = req.query["hub.mode"];
+  const challenge = req.query["hub.challenge"];
+  const verifyToken = req.query["hub.verify_token"];
+
+  let responseStatus = 200;
+  let responseData: string | undefined = typeof challenge === 'string' ? challenge : undefined;
+  let errorMessage: string | undefined;
+
+  try {
+    // Check if this is a subscription verification request
+    if (mode === "subscribe" && verifyToken === "DexterrTechnologies@12345") {
+      console.log("Facebook webhook verified successfully");
+      res.status(200).send(challenge);
+    } else {
+      console.log("Facebook webhook verification failed");
+      responseStatus = 403;
+      responseData = "Forbidden";
+      errorMessage = "Invalid verification";
+      res.status(403).send("Forbidden");
+    }
+  } catch (error: any) {
+    console.error("Facebook webhook verification error:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.status(500).send("Internal Server Error");
+  } finally {
+    // Log the webhook verification attempt to database
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: 'verification',
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      event_type: typeof mode === 'string' ? mode : undefined
+    });
+  }
+});
+
+// Facebook webhook data receiver
+app.post("/api/facebookWebhook", async (req, res) => {
+  const startTime = Date.now();
+  const body = req.body;
+  console.log("Facebook webhook received:", JSON.stringify(body, null, 2));
+
+  let responseStatus = 200;
+  let responseData = "OK";
+  let errorMessage: string | undefined;
+
+  try {
+    // Handle webhook events from Facebook
+    if (body.object === "whatsapp_business_account") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach(async (change: any) => {
+          if (change.value?.messages) {
+            console.log("Facebook incoming message:", change.value.messages);
+          }
+          if (change.value?.statuses) {
+            console.log("Facebook message status update:", change.value.statuses);
+          }
+        });
+      });
+    }
+
+    res.sendStatus(200);
+  } catch (error: any) {
+    console.error("Error processing Facebook webhook:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.sendStatus(500);
+  } finally {
+    // Log the webhook data to database
+    const processingTime = Date.now() - startTime;
+    const webhookType = WebhookLoggingService.determineWebhookType(req, body);
+    const extractedData = WebhookLoggingService.extractWebhookData(body);
+    
+    await WebhookLoggingService.logWebhook({
+      webhook_type: webhookType,
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      body_data: body,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      ...extractedData
+    });
+  }
 });
 
 // Mirror POST webhook on the same direct path so external services can POST here
