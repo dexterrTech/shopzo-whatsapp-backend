@@ -453,6 +453,43 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_message_logs_created_at ON message_logs(created_at);
     `);
 
+    // Create webhook_logs table for comprehensive webhook data logging
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS webhook_logs (
+        id SERIAL PRIMARY KEY,
+        webhook_type VARCHAR(50) NOT NULL CHECK (webhook_type IN ('verification', 'message_status', 'incoming_message', 'tech_partner', 'unknown')),
+        http_method VARCHAR(10) NOT NULL,
+        request_url TEXT NOT NULL,
+        query_params JSONB,
+        headers JSONB,
+        body_data JSONB,
+        response_status INTEGER,
+        response_data TEXT,
+        processing_time_ms INTEGER,
+        error_message TEXT,
+        user_id INTEGER REFERENCES users_whatsapp(id) ON DELETE SET NULL,
+        phone_number_id VARCHAR(255),
+        waba_id VARCHAR(255),
+        message_id VARCHAR(255),
+        conversation_id VARCHAR(255),
+        event_type VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        processed_at TIMESTAMP
+      )
+    `);
+
+    // Create indexes for webhook_logs
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_type ON webhook_logs(webhook_type);
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_created_at ON webhook_logs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_user_id ON webhook_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_phone_number_id ON webhook_logs(phone_number_id);
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_waba_id ON webhook_logs(waba_id);
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_message_id ON webhook_logs(message_id);
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_conversation_id ON webhook_logs(conversation_id);
+      CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_type ON webhook_logs(event_type);
+    `);
+
     console.log('✅ Database migrations completed successfully');
   } catch (error) {
     console.error('❌ Database migration failed:', error);
