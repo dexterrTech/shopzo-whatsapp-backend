@@ -85,7 +85,7 @@ export async function upsertBillingLog(params: {
        start_time, end_time, billing_status, amount_paise, amount_currency,
        country_code, country_name, price_plan_id
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     ON CONFLICT ON CONSTRAINT uq_billing_logs_conversation_per_user
+     ON CONFLICT (user_id, conversation_id)
      DO UPDATE SET
        category = EXCLUDED.category,
        recipient_number = EXCLUDED.recipient_number,
@@ -157,6 +157,65 @@ export async function chargeWalletForBilling(params: {
     const walletTxId = insTx.rows[0]?.id;
     if (walletTxId) {
       await pool.query('UPDATE billing_logs SET wallet_tx_id = $1, billing_status = $2 WHERE id = $3', [walletTxId, 'paid', logRow.id]);
+    }
+    await pool.query('COMMIT');
+    return walletTxId || null;
+  } catch (e) {
+    await pool.query('ROLLBACK');
+    throw e;
+  }
+}
+
+
+// Hold funds in suspense instead of immediately consuming them.
+// - Decrements wallet balance
+// - Increments suspense balance
+// - Creates a SUSPENSE_DEBIT wallet transaction
+// - Marks billing_log as pending and links wallet_tx_id
+export async function holdWalletInSuspenseForBilling(params: {
+  userId: number;
+  conversationId: string;
+  amountPaise: number;
+  currency: string;
+}): Promise<number | null> {
+  // Idempotency: if a wallet_tx_id already exists for this conversation, skip
+  const existing = await pool.query(
+    `SELECT id, wallet_tx_id FROM billing_logs WHERE user_id = $1 AND conversation_id = $2`,
+    [params.userId, params.conversationId]
+  );
+  const logRow = existing.rows[0];
+  if (!logRow) return null;
+  if (logRow.wallet_tx_id) return logRow.wallet_tx_id;
+
+  await pool.query('BEGIN');
+  try {
+    // Lock wallet row
+    const balRes = await pool.query('SELECT balance_paise, suspense_balance_paise FROM wallet_accounts WHERE user_id = $1 FOR UPDATE', [params.userId]);
+    const current = balRes.rows[0]?.balance_paise ?? 0;
+    const currentSuspense = balRes.rows[0]?.suspense_balance_paise ?? 0;
+    const nextBal = current - params.amountPaise;
+    if (nextBal < 0) {
+      await pool.query('ROLLBACK');
+      return null; // insufficient balance
+    }
+
+    const nextSuspense = currentSuspense + params.amountPaise;
+    await pool.query(
+      'UPDATE wallet_accounts SET balance_paise = $1, suspense_balance_paise = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $3',
+      [nextBal, nextSuspense, params.userId]
+    );
+
+    const txId = `HOLD-${params.conversationId}`.slice(0, 60);
+    const insTx = await pool.query(
+      `INSERT INTO wallet_transactions (user_id, transaction_id, type, status, amount_paise, currency, details, balance_after_paise, suspense_balance_after_paise)
+       VALUES ($1,$2,'SUSPENSE_DEBIT','completed',$3,$4,$5,$6,$7)
+       ON CONFLICT (transaction_id) DO NOTHING
+       RETURNING id`,
+      [params.userId, txId, params.amountPaise, params.currency, 'Billing hold (campaign/message)', nextBal, nextSuspense]
+    );
+    const walletTxId = insTx.rows[0]?.id;
+    if (walletTxId) {
+      await pool.query('UPDATE billing_logs SET wallet_tx_id = $1, billing_status = $2 WHERE id = $3', [walletTxId, 'pending', logRow.id]);
     }
     await pool.query('COMMIT');
     return walletTxId || null;

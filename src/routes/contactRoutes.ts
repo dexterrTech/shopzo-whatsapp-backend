@@ -23,6 +23,9 @@ const router = Router();
  *         id:
  *           type: integer
  *           description: Unique identifier for the contact
+ *         user_id:
+ *           type: integer
+ *           description: ID of the user who owns this contact
  *         name:
  *           type: string
  *           description: Contact's full name
@@ -32,7 +35,7 @@ const router = Router();
  *           description: Contact's email address
  *         whatsapp_number:
  *           type: string
- *           description: WhatsApp number (required, unique)
+ *           description: WhatsApp number (required, unique per user)
  *         phone:
  *           type: string
  *           description: Alternative phone number
@@ -61,6 +64,7 @@ const router = Router();
  *           description: When the contact was last seen
  *       required:
  *         - id
+ *         - user_id
  *         - whatsapp_number
  *         - created_at
  *         - last_seen_at
@@ -120,8 +124,8 @@ const router = Router();
  *   get:
  *     tags:
  *       - Contacts
- *     summary: Get all contacts
- *     description: Retrieve a list of all contacts with optional pagination
+ *     summary: Get user's contacts
+ *     description: Retrieve a list of contacts belonging to the authenticated user with optional pagination
  *     parameters:
  *       - in: query
  *         name: limit
@@ -155,6 +159,7 @@ const router = Router();
  */
 router.get("/", authenticateToken, async (req, res, next) => {
   try {
+    const userId = req.user!.userId;
     const querySchema = z.object({
       limit: z.coerce.number().int().min(1).max(200).optional(),
       search: z.string().optional(),
@@ -164,9 +169,9 @@ router.get("/", authenticateToken, async (req, res, next) => {
 
     let contacts;
     if (query.search) {
-      contacts = await ContactService.searchContacts(query.search, query.limit);
+      contacts = await ContactService.searchContacts(query.search, userId, query.limit);
     } else {
-      contacts = await ContactService.getAllContacts(query.limit);
+      contacts = await ContactService.getAllContacts(userId, query.limit);
     }
 
     res.json({ data: contacts });
@@ -181,8 +186,8 @@ router.get("/", authenticateToken, async (req, res, next) => {
  *   get:
  *     tags:
  *       - Contacts
- *     summary: Export contacts as CSV
- *     description: Download all contacts (optionally filtered by search) as CSV
+ *     summary: Export user's contacts as CSV
+ *     description: Download all contacts belonging to the authenticated user (optionally filtered by search) as CSV
  *     parameters:
  *       - in: query
  *         name: search
@@ -199,12 +204,13 @@ router.get("/", authenticateToken, async (req, res, next) => {
  */
 router.get("/export", authenticateToken, async (req, res, next) => {
   try {
+    const userId = req.user!.userId;
     const querySchema = z.object({ search: z.string().optional() });
     const { search } = querySchema.parse(req.query);
 
     const contacts = search
-      ? await ContactService.searchContacts(search)
-      : await ContactService.getAllContacts();
+      ? await ContactService.searchContacts(search, userId)
+      : await ContactService.getAllContacts(userId);
 
     const headers = [
       'id','name','email','whatsapp_number','phone','telegram_id','viber_id','line_id','instagram_id','facebook_id','created_at','last_seen_at'
@@ -256,13 +262,15 @@ router.get("/export", authenticateToken, async (req, res, next) => {
  */
 router.get("/:id", authenticateToken, async (req, res, next) => {
   try {
-    const paramsSchema = z.object({
-      id: z.coerce.number().int().positive(),
-    });
+    const userId = req.user!.userId;
+    const id = parseInt(req.params.id);
+    
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid contact ID" });
+    }
 
-    const params = paramsSchema.parse(req.params);
-    const contact = await ContactService.getContactById(params.id);
-
+    const contact = await ContactService.getContactById(id, userId);
+    
     if (!contact) {
       return res.status(404).json({ error: "Contact not found" });
     }
@@ -303,6 +311,7 @@ router.get("/:id", authenticateToken, async (req, res, next) => {
  */
 router.post("/", authenticateToken, async (req, res, next) => {
   try {
+    const userId = req.user!.userId;
     const bodySchema = z.object({
       name: z.string().optional(),
       email: z.string().email().optional(),
@@ -317,15 +326,15 @@ router.post("/", authenticateToken, async (req, res, next) => {
 
     const body = bodySchema.parse(req.body);
 
-    // Check if contact with this WhatsApp number already exists
-    const existingContact = await ContactService.getContactByWhatsAppNumber(body.whatsapp_number);
+    // Check if contact with this WhatsApp number already exists for this user
+    const existingContact = await ContactService.getContactByWhatsAppNumber(body.whatsapp_number, userId);
     if (existingContact) {
       return res.status(409).json({ 
         error: "Contact with this WhatsApp number already exists" 
       });
     }
 
-    const contact = await ContactService.createContact(body);
+    const contact = await ContactService.createContact({ ...body, user_id: userId });
     res.status(201).json(contact);
   } catch (err) {
     next(err);
@@ -371,9 +380,12 @@ router.post("/", authenticateToken, async (req, res, next) => {
  */
 router.put("/:id", authenticateToken, async (req, res, next) => {
   try {
-    const paramsSchema = z.object({
-      id: z.coerce.number().int().positive(),
-    });
+    const userId = req.user!.userId;
+    const id = parseInt(req.params.id);
+    
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid contact ID" });
+    }
 
     const bodySchema = z.object({
       name: z.string().optional(),
@@ -387,26 +399,24 @@ router.put("/:id", authenticateToken, async (req, res, next) => {
       facebook_id: z.string().optional(),
     });
 
-    const params = paramsSchema.parse(req.params);
     const body = bodySchema.parse(req.body);
 
-    // Check if contact exists
-    const existingContact = await ContactService.getContactById(params.id);
-    if (!existingContact) {
-      return res.status(404).json({ error: "Contact not found" });
-    }
-
-    // If updating WhatsApp number, check if it's already taken by another contact
-    if (body.whatsapp_number && body.whatsapp_number !== existingContact.whatsapp_number) {
-      const contactWithNumber = await ContactService.getContactByWhatsAppNumber(body.whatsapp_number);
-      if (contactWithNumber && contactWithNumber.id !== params.id) {
+    // If updating WhatsApp number, check for conflicts
+    if (body.whatsapp_number) {
+      const existingContact = await ContactService.getContactByWhatsAppNumber(body.whatsapp_number, userId);
+      if (existingContact && existingContact.id !== id) {
         return res.status(409).json({ 
           error: "Contact with this WhatsApp number already exists" 
         });
       }
     }
 
-    const contact = await ContactService.updateContact({ id: params.id, ...body });
+    const contact = await ContactService.updateContact(id, userId, body);
+    
+    if (!contact) {
+      return res.status(404).json({ error: "Contact not found" });
+    }
+
     res.json(contact);
   } catch (err) {
     next(err);
@@ -420,7 +430,7 @@ router.put("/:id", authenticateToken, async (req, res, next) => {
  *     tags:
  *       - Contacts
  *     summary: Delete a contact
- *     description: Delete a contact by their ID
+ *     description: Delete an existing contact
  *     parameters:
  *       - in: path
  *         name: id
@@ -431,14 +441,6 @@ router.put("/:id", authenticateToken, async (req, res, next) => {
  *     responses:
  *       200:
  *         description: Contact deleted successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Contact deleted successfully"
  *       404:
  *         description: Contact not found
  *       500:
@@ -446,13 +448,15 @@ router.put("/:id", authenticateToken, async (req, res, next) => {
  */
 router.delete("/:id", authenticateToken, async (req, res, next) => {
   try {
-    const paramsSchema = z.object({
-      id: z.coerce.number().int().positive(),
-    });
+    const userId = req.user!.userId;
+    const id = parseInt(req.params.id);
+    
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid contact ID" });
+    }
 
-    const params = paramsSchema.parse(req.params);
-    const deleted = await ContactService.deleteContact(params.id);
-
+    const deleted = await ContactService.deleteContact(id, userId);
+    
     if (!deleted) {
       return res.status(404).json({ error: "Contact not found" });
     }
@@ -515,6 +519,7 @@ router.delete("/:id", authenticateToken, async (req, res, next) => {
  */
 router.post("/import", authenticateToken, async (req, res, next) => {
   try {
+    const userId = req.user!.userId;
     const bodySchema = z.object({
       upsert: z.boolean().optional().default(true),
       dedupe: z.boolean().optional().default(true),
@@ -546,11 +551,11 @@ router.post("/import", authenticateToken, async (req, res, next) => {
         })
       : contacts;
 
-    // Preload which numbers already exist for summary purposes
+    // Preload which numbers already exist for this user for summary purposes
     const numbers = filtered.map((c) => c.whatsapp_number.trim());
     const existingRes = await pool.query(
-      `SELECT whatsapp_number FROM contacts WHERE whatsapp_number = ANY($1::text[])`,
-      [numbers]
+      `SELECT whatsapp_number FROM contacts WHERE user_id = $1 AND whatsapp_number = ANY($2::text[])`,
+      [userId, numbers]
     );
     const existingSet = new Set<string>(existingRes.rows.map((r) => r.whatsapp_number));
 
@@ -561,6 +566,7 @@ router.post("/import", authenticateToken, async (req, res, next) => {
     try {
       for (const c of filtered) {
         const params = [
+          userId,
           c.name ?? null,
           c.email ?? null,
           c.whatsapp_number.trim(),
@@ -574,9 +580,9 @@ router.post("/import", authenticateToken, async (req, res, next) => {
 
         if (upsert) {
           await pool.query(
-            `INSERT INTO contacts (name, email, whatsapp_number, phone, telegram_id, viber_id, line_id, instagram_id, facebook_id, created_at, last_seen_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW(), NOW())
-             ON CONFLICT (whatsapp_number) DO UPDATE SET
+            `INSERT INTO contacts (user_id, name, email, whatsapp_number, phone, telegram_id, viber_id, line_id, instagram_id, facebook_id, created_at, last_seen_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW(), NOW())
+             ON CONFLICT (user_id, whatsapp_number) DO UPDATE SET
                name = COALESCE(EXCLUDED.name, contacts.name),
                email = COALESCE(EXCLUDED.email, contacts.email),
                phone = COALESCE(EXCLUDED.phone, contacts.phone),
@@ -595,9 +601,9 @@ router.post("/import", authenticateToken, async (req, res, next) => {
         } else {
           // Insert only; ignore duplicates
           const result = await pool.query(
-            `INSERT INTO contacts (name, email, whatsapp_number, phone, telegram_id, viber_id, line_id, instagram_id, facebook_id, created_at, last_seen_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW(), NOW())
-             ON CONFLICT (whatsapp_number) DO NOTHING`,
+            `INSERT INTO contacts (user_id, name, email, whatsapp_number, phone, telegram_id, viber_id, line_id, instagram_id, facebook_id, created_at, last_seen_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW(), NOW())
+             ON CONFLICT (user_id, whatsapp_number) DO NOTHING`,
             params
           );
           if (result.rowCount && result.rowCount > 0) {

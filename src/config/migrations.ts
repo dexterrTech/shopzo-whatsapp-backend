@@ -4,32 +4,6 @@ export async function runMigrations() {
   try {
     console.log('Running database migrations...');
     
-    // Create contacts table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS contacts (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255),
-        email VARCHAR(255),
-        whatsapp_number VARCHAR(20) UNIQUE NOT NULL,
-        phone VARCHAR(20),
-        telegram_id VARCHAR(100),
-        viber_id VARCHAR(100),
-        line_id VARCHAR(100),
-        instagram_id VARCHAR(100),
-        facebook_id VARCHAR(100),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    
-    // Create indexes for better performance
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_contacts_whatsapp_number ON contacts(whatsapp_number);
-      CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
-      CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
-      CREATE INDEX IF NOT EXISTS idx_contacts_created_at ON contacts(created_at);
-    `);
-
     // Create users table (already in use by auth) if not exists
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users_whatsapp (
@@ -53,6 +27,54 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_users_role ON users_whatsapp(role);
       CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users_whatsapp(is_approved);
       CREATE INDEX IF NOT EXISTS idx_users_created_at ON users_whatsapp(created_at);
+    `);
+
+    // Check if contacts table exists and has user_id column
+    const tableCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'contacts' AND column_name = 'user_id'
+    `);
+
+    if (tableCheck.rows.length === 0) {
+      // Table doesn't exist or user_id column doesn't exist
+      console.log('Creating contacts table with user_id column...');
+      
+      // Drop existing table if it exists (without user_id)
+      await pool.query(`DROP TABLE IF EXISTS contacts CASCADE`);
+      
+      // Create new table with user_id
+      await pool.query(`
+        CREATE TABLE contacts (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+          name VARCHAR(255),
+          email VARCHAR(255),
+          whatsapp_number VARCHAR(20) NOT NULL,
+          phone VARCHAR(20),
+          telegram_id VARCHAR(100),
+          viber_id VARCHAR(100),
+          line_id VARCHAR(100),
+          instagram_id VARCHAR(100),
+          facebook_id VARCHAR(100),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, whatsapp_number)
+        );
+      `);
+      
+      console.log('Contacts table created with user_id column');
+    } else {
+      console.log('Contacts table already has user_id column');
+    }
+
+    // Create indexes for better performance (after ensuring user_id column exists)
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
+      CREATE INDEX IF NOT EXISTS idx_contacts_whatsapp_number ON contacts(whatsapp_number);
+      CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
+      CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
+      CREATE INDEX IF NOT EXISTS idx_contacts_created_at ON contacts(created_at);
     `);
 
     // Price plans for configurable conversation pricing
@@ -279,6 +301,30 @@ export async function runMigrations() {
     }
 
     // Safe column add: created_by for aggregator-owned plans
+    // Safe column adds/upgrades for existing databases (suspense support)
+    await pool.query(`
+      ALTER TABLE wallet_accounts
+      ADD COLUMN IF NOT EXISTS suspense_balance_paise INTEGER NOT NULL DEFAULT 0;
+    `);
+    await pool.query(`
+      ALTER TABLE wallet_transactions
+      ADD COLUMN IF NOT EXISTS suspense_balance_after_paise INTEGER;
+    `);
+    // Refresh wallet_transactions.type check to include suspense types
+    await pool.query(`
+      DO $$
+      BEGIN
+        BEGIN
+          ALTER TABLE wallet_transactions DROP CONSTRAINT IF EXISTS wallet_transactions_type_check;
+        EXCEPTION WHEN undefined_object THEN
+          -- nothing
+          NULL;
+        END;
+        ALTER TABLE wallet_transactions ADD CONSTRAINT wallet_transactions_type_check
+          CHECK (type IN ('RECHARGE','DEBIT','REFUND','ADJUSTMENT','SUSPENSE_DEBIT','SUSPENSE_REFUND'));
+      END$$;
+    `);
+
     await pool.query(`
       ALTER TABLE price_plans
       ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users_whatsapp(id);
