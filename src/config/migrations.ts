@@ -337,6 +337,7 @@ export async function runMigrations() {
           'not_started', 
           'embedded_signup_completed', 
           'tp_signup_completed', 
+          'wallet_check_completed',
           'templates_setup_completed', 
           'setup_completed'
         )),
@@ -353,9 +354,62 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_whatsapp_setups_waba_id ON whatsapp_setups(waba_id);
     `);
 
-    console.log('Migrations completed successfully');
+    // Create campaigns table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        trigger_type VARCHAR(20) NOT NULL CHECK (trigger_type IN ('IMMEDIATE', 'SCHEDULED')),
+        audience_type VARCHAR(20) NOT NULL CHECK (audience_type IN ('ALL', 'SEGMENTED', 'QUICK')),
+        message_type VARCHAR(20) NOT NULL CHECK (message_type IN ('TEMPLATE', 'REGULAR', 'BOT')),
+        template_id VARCHAR(255),
+        message_content TEXT,
+        audience_size INTEGER NOT NULL,
+        scheduled_at TIMESTAMP,
+        status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'ACTIVE', 'PROCESSING', 'COMPLETED', 'PARTIALLY_COMPLETED', 'FAILED')),
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        processed_at TIMESTAMP,
+        completed_at TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create message_logs table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS message_logs (
+        id SERIAL PRIMARY KEY,
+        campaign_id VARCHAR(255) NOT NULL,
+        to_number VARCHAR(20) NOT NULL,
+        template_name VARCHAR(255) NOT NULL,
+        language_code VARCHAR(10) NOT NULL,
+        message_id VARCHAR(255) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED')),
+        sent_at TIMESTAMP,
+        delivered_at TIMESTAMP,
+        read_at TIMESTAMP,
+        failed_at TIMESTAMP,
+        error_message TEXT,
+        user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create indexes for better performance
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_campaigns_user_id ON campaigns(user_id);
+      CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+      CREATE INDEX IF NOT EXISTS idx_campaigns_created_at ON campaigns(created_at);
+      CREATE INDEX IF NOT EXISTS idx_message_logs_campaign_id ON message_logs(campaign_id);
+      CREATE INDEX IF NOT EXISTS idx_message_logs_user_id ON message_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_message_logs_status ON message_logs(status);
+      CREATE INDEX IF NOT EXISTS idx_message_logs_created_at ON message_logs(created_at);
+    `);
+
+    console.log('✅ Database migrations completed successfully');
   } catch (error) {
-    console.error('Migration failed:', error);
+    console.error('❌ Database migration failed:', error);
     throw error;
   }
 }

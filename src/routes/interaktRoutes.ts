@@ -433,52 +433,8 @@ router.get("/phone-numbers", authenticateToken, async (req, res, next) => {
  *                       components:
  *                         type: array
  */
-// GET /api/interakt/templates
-router.get("/templates", authenticateToken, async (req, res, next) => {
-  try {
-    const query = z
-      .object({
-        fields: z.string().optional(),
-        limit: z.coerce.number().int().min(1).max(100).optional(),
-      })
-      .parse(req.query);
-
-    const data = await withFallback({
-      feature: "getTemplates",
-      attempt: () => interaktClient.getTemplates(query),
-      fallback: async () => ({
-        data: [
-          {
-            name: "shopzo invoice pdf",
-            parameter_format: "POSITIONAL",
-            components: [
-              { type: "BODY", text: "Hello {{1}}", example: { body_text: [["Name"]] } },
-            ],
-            language: "en",
-            status: "APPROVED",
-            category: "UTILITY",
-            id: "mock-1",
-          },
-          {
-            name: "monsoon",
-            parameter_format: "POSITIONAL",
-            components: [{ type: "BODY", text: "Sale!" }],
-            language: "en",
-            status: "APPROVED",
-            category: "MARKETING",
-            id: "mock-2",
-          },
-        ],
-        paging: { cursors: { before: "MAZDZD", after: "MjQZD" } },
-        fallback: true,
-      }),
-    });
-
-    res.json(data);
-  } catch (err) {
-    next(err);
-  }
-});
+// Template fetching endpoints have been moved to /api/templates
+// Use the new user-specific template endpoints instead
 
 /**
  * @openapi
@@ -599,61 +555,8 @@ router.get("/templates", authenticateToken, async (req, res, next) => {
  *                 category:
  *                   type: string
  */
-// POST /api/interakt/templates
-router.post("/templates", authenticateToken, async (req, res, next) => {
-  try {
-    const bodySchema = z.object({
-      name: z.string().min(1),
-      language: z.string().min(1),
-      category: z.enum(["AUTHENTICATION", "MARKETING", "UTILITY"]),
-      components: z.array(z.any()),
-      auto_category: z.boolean().optional(),
-    });
-
-    const body = bodySchema.parse(req.body);
-    const data = await withFallback({
-      feature: "createTextTemplate",
-      attempt: () => interaktClient.createTextTemplate(body),
-      fallback: () => ({ id: "mock-template-id", status: "PENDING", category: body.category, fallback: true }),
-    });
-
-    res.status(201).json(data);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/interakt/templates/media
-router.post("/templates/media", authenticateToken, async (req, res, next) => {
-  try {
-    const bodySchema = z.object({
-      name: z.string().min(1),
-      language: z.string().min(1),
-      category: z.enum(["AUTHENTICATION", "MARKETING", "UTILITY"]),
-      components: z.array(z.object({
-        type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS"]),
-        format: z.enum(["IMAGE", "VIDEO", "DOCUMENT"]).optional(),
-        text: z.string().optional(),
-        example: z.object({
-          header_handle: z.array(z.string()).optional(),
-          body_text: z.array(z.array(z.string())).optional(),
-        }).optional(),
-      })),
-      auto_category: z.boolean().optional(),
-    });
-
-    const body = bodySchema.parse(req.body);
-    const data = await withFallback({
-      feature: "createMediaTemplate",
-      attempt: () => interaktClient.createTextTemplate(body), // Using same method for now
-      fallback: () => ({ id: "mock-media-template-id", status: "PENDING", category: body.category, fallback: true }),
-    });
-
-    res.status(201).json(data);
-  } catch (err) {
-    next(err);
-  }
-});
+// Template creation endpoints have been moved to /api/templates
+// Use the new user-specific template endpoints instead
 
 /**
  * @openapi
@@ -691,33 +594,8 @@ router.post("/templates/media", authenticateToken, async (req, res, next) => {
  *                 components:
  *                   type: array
  */
-// GET /api/interakt/templates/:id
-router.get("/templates/:id", authenticateToken, async (req, res, next) => {
-  try {
-    const { id } = z.object({ id: z.string() }).parse(req.params);
-
-    const data = await withFallback({
-      feature: "getTemplateById",
-      attempt: () => interaktClient.getTemplateById(id),
-      fallback: async () => ({
-        id,
-        name: "mock template",
-        parameter_format: "POSITIONAL",
-        components: [
-          { type: "BODY", text: "Hello {{1}}, this is a mock template." }
-        ],
-        language: "en",
-        status: "APPROVED",
-        category: "UTILITY",
-        fallback: true,
-      }),
-    });
-
-    res.json(data);
-  } catch (err) {
-    next(err);
-  }
-});
+// Individual template fetching has been moved to /api/templates/:id
+// Use the new user-specific template endpoints instead
 
 /**
  * @openapi
@@ -809,92 +687,8 @@ router.get("/templates/:id", authenticateToken, async (req, res, next) => {
  *                       message_status:
  *                         type: string
  */
-// POST /api/interakt/messages
-router.post("/messages", authenticateToken, async (req, res, next) => {
-  try {
-    const payload = z
-      .object({
-        messaging_product: z.literal("whatsapp"),
-        recipient_type: z.literal("individual").default("individual"),
-        to: z.string(),
-        type: z.literal("template"),
-        template: z.any(),
-      })
-      .parse(req.body);
-
-    // Pre-send balance check using plan price for inferred category
-    try {
-      const userId = (req as any).user?.userId as number | undefined;
-      if (userId) {
-        const templateName = (payload as any)?.template?.name || '';
-        let category: BillingCategory = 'utility';
-        const n = String(templateName).toLowerCase();
-        if (n.includes('auth')) category = 'authentication';
-        else if (n.includes('market') || n.includes('promo')) category = 'marketing';
-        const plan = await resolveUserPricePlan(userId);
-        const amount = basePriceForCategory(plan, category);
-        if (amount > 0) {
-          const balRes = await pool.query('SELECT balance_paise FROM wallet_accounts WHERE user_id = $1', [userId]);
-          const balance = balRes.rows[0]?.balance_paise ?? 0;
-          if (balance < amount) {
-            return res.status(402).json({ success: false, message: 'Insufficient wallet balance' });
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Pre-send balance check failed (continuing):', e);
-    }
-
-    const data = await withFallback({
-      feature: "sendMediaTemplate",
-      attempt: () => interaktClient.sendMediaTemplate(payload),
-      fallback: () => ({
-        messaging_product: "whatsapp",
-        contacts: [{ input: payload.to, wa_id: payload.to }],
-        messages: [{ id: "mock-msg-id", message_status: "accepted" }],
-        fallback: true,
-      }),
-    });
-
-    // Attempt to log billing using token user (only if template payload indicates a category)
-    try {
-      const userId = (req as any).user?.userId as number | undefined;
-      const conversationId = data?.messages?.[0]?.id;
-      const templateName = (payload as any)?.template?.name || '';
-      // Basic heuristic: derive category from template name prefix, else default to 'utility'
-      let category: BillingCategory = 'utility';
-      const n = String(templateName).toLowerCase();
-      if (n.includes('auth')) category = 'authentication';
-      else if (n.includes('market') || n.includes('promo')) category = 'marketing';
-      // else 'utility' as default
-      if (userId && conversationId) {
-        const ins = await upsertBillingLog({
-          userId,
-          conversationId,
-          category,
-          recipientNumber: payload.to,
-          startTime: new Date(),
-          endTime: new Date(),
-          billingStatus: 'pending',
-        });
-        if (ins) {
-          // Attempt immediate wallet charge; if insufficient balance, leave pending
-          const amountRes = await pool.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
-          const row = amountRes.rows[0];
-          if (row) {
-            await chargeWalletForBilling({ userId, conversationId, amountPaise: row.amount_paise, currency: row.amount_currency });
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('send messages billing log skipped:', e);
-    }
-
-    res.status(202).json(data);
-  } catch (err) {
-    next(err);
-  }
-});
+// Template message sending has been moved to /api/templates/send
+// Use the new user-specific template endpoints instead
 
 // POST /api/interakt/messages/media
 router.post("/messages/media", authenticateToken, async (req, res, next) => {

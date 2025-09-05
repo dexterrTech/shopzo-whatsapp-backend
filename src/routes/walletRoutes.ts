@@ -372,6 +372,115 @@ router.get('/all-users', authenticateToken, requireSuperAdmin, async (req, res) 
   }
 });
 
+/**
+ * @swagger
+ * /api/wallet/verify:
+ *   post:
+ *     summary: Verify wallet and update WhatsApp setup status
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - verified
+ *             properties:
+ *               verified:
+ *                 type: boolean
+ *                 description: Whether wallet verification is completed
+ *     responses:
+ *       200:
+ *         description: Wallet verification completed and WhatsApp status updated
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/verify', authenticateToken, async (req, res) => {
+  try {
+    const { verified } = req.body;
+    
+    if (typeof verified !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'verified field must be a boolean'
+      });
+    }
+
+    if (verified) {
+      const userId = req.user!.userId;
+      
+      // First, check if user has a wallet account and sufficient balance (at least 1 rupee = 100 paise)
+      const walletCheck = await pool.query(`
+        SELECT balance_paise, suspense_balance_paise 
+        FROM wallet_accounts 
+        WHERE user_id = $1
+      `, [userId]);
+      
+      if (walletCheck.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No wallet account found. Please contact support.'
+        });
+      }
+      
+      const wallet = walletCheck.rows[0];
+      const totalBalance = (wallet.balance_paise || 0) + (wallet.suspense_balance_paise || 0);
+      
+      if (totalBalance < 100) { // Less than 1 rupee (100 paise)
+        return res.status(400).json({
+          success: false,
+          message: 'Insufficient wallet balance. You need at least ₹1.00 to verify your wallet.'
+        });
+      }
+      
+      // Check if whatsapp_setups record exists, if not create one
+      const setupCheck = await pool.query(`
+        SELECT id FROM whatsapp_setups WHERE user_id = $1
+      `, [userId]);
+      
+      if (setupCheck.rows.length === 0) {
+        // Create a new whatsapp_setups record
+        await pool.query(`
+          INSERT INTO whatsapp_setups (user_id, status, created_at, updated_at)
+          VALUES ($1, 'wallet_check_completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `, [userId]);
+      } else {
+        // Update existing record
+        await pool.query(`
+          UPDATE whatsapp_setups 
+          SET status = 'wallet_check_completed', updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = $1
+        `, [userId]);
+      }
+
+      res.json({
+        success: true,
+        message: 'Wallet verification completed successfully! You now have access to WhatsApp Business features.',
+        data: {
+          balance: totalBalance / 100, // Convert paise to rupees
+          balance_paise: totalBalance
+        }
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'Wallet verification status updated'
+      });
+    }
+  } catch (error) {
+    console.error('Error in wallet verification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to complete wallet verification'
+    });
+  }
+});
+
 export default router;
 
 
