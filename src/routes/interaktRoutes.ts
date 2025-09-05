@@ -7,6 +7,7 @@ import { upsertBillingLog, BillingCategory, chargeWalletForBilling, resolveUserP
 import { WalletService } from "../services/walletService";
 import { authenticateToken } from "../middleware/authMiddleware";
 import { pool } from "../config/database";
+import { WebhookLoggingService } from "../services/webhookLoggingService";
 
 const router = Router();
 
@@ -1893,6 +1894,955 @@ router.get("/analytics/summary", authenticateToken, async (req, res, next) => {
     res.json(data);
   } catch (err) {
     next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook-logs:
+ *   get:
+ *     tags:
+ *       - Webhook
+ *     summary: Get Webhook Logs
+ *     description: Retrieve webhook logs for analysis and debugging. Supports filtering by webhook type, user, phone number, WABA ID, event type, and date range.
+ *     parameters:
+ *       - in: query
+ *         name: webhook_type
+ *         schema:
+ *           type: string
+ *           enum: [verification, message_status, incoming_message, tech_partner, unknown]
+ *         description: Filter by webhook type
+ *       - in: query
+ *         name: user_id
+ *         schema:
+ *           type: integer
+ *         description: Filter by user ID
+ *       - in: query
+ *         name: phone_number_id
+ *         schema:
+ *           type: string
+ *         description: Filter by phone number ID
+ *       - in: query
+ *         name: waba_id
+ *         schema:
+ *           type: string
+ *         description: Filter by WABA ID
+ *       - in: query
+ *         name: event_type
+ *         schema:
+ *           type: string
+ *         description: Filter by event type
+ *       - in: query
+ *         name: start_date
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Filter logs from this date
+ *       - in: query
+ *         name: end_date
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Filter logs until this date
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 1000
+ *           default: 100
+ *         description: Number of logs to return
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           default: 0
+ *         description: Number of logs to skip
+ *     responses:
+ *       200:
+ *         description: Webhook logs retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 logs:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       webhook_type:
+ *                         type: string
+ *                       http_method:
+ *                         type: string
+ *                       request_url:
+ *                         type: string
+ *                       query_params:
+ *                         type: object
+ *                       headers:
+ *                         type: object
+ *                       body_data:
+ *                         type: object
+ *                       response_status:
+ *                         type: integer
+ *                       response_data:
+ *                         type: string
+ *                       processing_time_ms:
+ *                         type: integer
+ *                       error_message:
+ *                         type: string
+ *                       user_id:
+ *                         type: integer
+ *                       phone_number_id:
+ *                         type: string
+ *                       waba_id:
+ *                         type: string
+ *                       message_id:
+ *                         type: string
+ *                       conversation_id:
+ *                         type: string
+ *                       event_type:
+ *                         type: string
+ *                       created_at:
+ *                         type: string
+ *                         format: date-time
+ *                       processed_at:
+ *                         type: string
+ *                         format: date-time
+ *                 total_count:
+ *                   type: integer
+ *                 filters_applied:
+ *                   type: object
+ */
+// GET /api/interakt/webhook-logs - Get webhook logs for analysis
+router.get("/webhook-logs", authenticateToken, async (req, res, next) => {
+  try {
+    const querySchema = z.object({
+      webhook_type: z.enum(['verification', 'message_status', 'incoming_message', 'tech_partner', 'unknown']).optional(),
+      user_id: z.coerce.number().optional(),
+      phone_number_id: z.string().optional(),
+      waba_id: z.string().optional(),
+      event_type: z.string().optional(),
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      limit: z.coerce.number().min(1).max(1000).default(100),
+      offset: z.coerce.number().min(0).default(0)
+    });
+
+    const filters = querySchema.parse(req.query);
+    
+    const logs = await WebhookLoggingService.getWebhookLogs(filters);
+    
+    // Get total count for pagination
+    const countQuery = `
+      SELECT COUNT(*) as total_count
+      FROM webhook_logs
+      WHERE 1=1
+      ${filters.webhook_type ? 'AND webhook_type = $1' : ''}
+      ${filters.user_id ? `AND user_id = $${filters.webhook_type ? '2' : '1'}` : ''}
+      ${filters.phone_number_id ? `AND phone_number_id = $${filters.webhook_type ? (filters.user_id ? '3' : '2') : (filters.user_id ? '2' : '1')}` : ''}
+      ${filters.waba_id ? `AND waba_id = $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+      ${filters.event_type ? `AND event_type = $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+      ${filters.start_date ? `AND created_at >= $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+      ${filters.end_date ? `AND created_at <= $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+    `;
+
+    const countValues = Object.entries(filters)
+      .filter(([key]) => key !== 'limit' && key !== 'offset')
+      .map(([, value]) => value);
+
+    const countResult = await pool.query(countQuery, countValues);
+    const totalCount = parseInt(countResult.rows[0].total_count);
+
+    res.json({
+      logs,
+      total_count: totalCount,
+      filters_applied: filters,
+      pagination: {
+        limit: filters.limit,
+        offset: filters.offset,
+        has_more: filters.offset + filters.limit < totalCount
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook-stats:
+ *   get:
+ *     tags:
+ *       - Webhook
+ *     summary: Get Webhook Statistics
+ *     description: Get webhook statistics for the last 7 days including success rates, processing times, and webhook type distribution.
+ *     responses:
+ *       200:
+ *         description: Webhook statistics retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 stats:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       webhook_type:
+ *                         type: string
+ *                       total_count:
+ *                         type: integer
+ *                       success_count:
+ *                         type: integer
+ *                       error_count:
+ *                         type: integer
+ *                       success_rate:
+ *                         type: number
+ *                         format: float
+ *                       avg_processing_time_ms:
+ *                         type: number
+ *                         format: float
+ *                       last_webhook_at:
+ *                         type: string
+ *                         format: date-time
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total_webhooks:
+ *                       type: integer
+ *                     total_success:
+ *                       type: integer
+ *                     total_errors:
+ *                       type: integer
+ *                     overall_success_rate:
+ *                       type: number
+ *                       format: float
+ *                     avg_processing_time_ms:
+ *                       type: number
+ *                       format: float
+ */
+// GET /api/interakt/webhook-stats - Get webhook statistics
+router.get("/webhook-stats", authenticateToken, async (req, res, next) => {
+  try {
+    const stats = await WebhookLoggingService.getWebhookStats();
+    
+    // Calculate summary statistics
+    const summary = {
+      total_webhooks: stats.reduce((sum, stat) => sum + parseInt(stat.total_count), 0),
+      total_success: stats.reduce((sum, stat) => sum + parseInt(stat.success_count), 0),
+      total_errors: stats.reduce((sum, stat) => sum + parseInt(stat.error_count), 0),
+      overall_success_rate: 0,
+      avg_processing_time_ms: 0
+    };
+
+    if (summary.total_webhooks > 0) {
+      summary.overall_success_rate = (summary.total_success / summary.total_webhooks) * 100;
+    }
+
+    const totalProcessingTime = stats.reduce((sum, stat) => {
+      const avgTime = parseFloat(stat.avg_processing_time_ms) || 0;
+      const count = parseInt(stat.total_count);
+      return sum + (avgTime * count);
+    }, 0);
+
+    if (summary.total_webhooks > 0) {
+      summary.avg_processing_time_ms = totalProcessingTime / summary.total_webhooks;
+    }
+
+    // Add success rate to each stat
+    const statsWithRates = stats.map(stat => ({
+      ...stat,
+      success_rate: parseInt(stat.total_count) > 0 
+        ? (parseInt(stat.success_count) / parseInt(stat.total_count)) * 100 
+        : 0
+    }));
+
+    res.json({
+      stats: statsWithRates,
+      summary
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook-verify-logged:
+ *   get:
+ *     tags:
+ *       - Webhook
+ *     summary: WhatsApp Cloud API Webhook Verification (with Logging)
+ *     description: Alternative webhook verification endpoint that logs all verification attempts to database for analysis.
+ *     parameters:
+ *       - in: query
+ *         name: hub.mode
+ *         schema:
+ *           type: string
+ *         description: Must be "subscribe"
+ *         required: true
+ *         example: "subscribe"
+ *       - in: query
+ *         name: hub.challenge
+ *         schema:
+ *           type: string
+ *         description: Challenge string to verify webhook
+ *         required: true
+ *         example: "1234567890"
+ *       - in: query
+ *         name: hub.verify_token
+ *         schema:
+ *           type: string
+ *         description: Verification token to validate webhook
+ *         required: true
+ *         example: "DexterrTechnologies@12345"
+ *     responses:
+ *       200:
+ *         description: Webhook verified successfully - returns the hub.challenge value
+ *         content:
+ *           text/plain:
+ *             schema:
+ *               type: string
+ *               example: "1234567890"
+ *       403:
+ *         description: Webhook verification failed - invalid verify token
+ */
+// GET /api/interakt/webhook-verify-logged - WhatsApp Cloud API Webhook verification with logging
+router.get("/webhook-verify-logged", async (req, res) => {
+  const startTime = Date.now();
+  const mode = req.query["hub.mode"];
+  const challenge = req.query["hub.challenge"];
+  const verifyToken = req.query["hub.verify_token"];
+
+  console.log("WhatsApp Cloud API webhook verification attempt (logged):", { 
+    mode, 
+    challenge, 
+    verifyToken: verifyToken ? `${verifyToken.toString().substring(0, 10)}...` : 'NOT_PROVIDED' 
+  });
+
+  let responseStatus = 200;
+  let responseData: string | undefined = typeof challenge === 'string' ? challenge : undefined;
+  let errorMessage: string | undefined;
+
+  try {
+    // Check if this is a subscription verification request
+    if (mode === "subscribe") {
+      // Verify the token matches our expected token
+      if (verifyToken === "DexterrTechnologies@12345") {
+        console.log("Webhook verified successfully - returning challenge:", challenge);
+        res.status(200).send(challenge);
+      } else {
+        console.log("Webhook verification failed - invalid verify token");
+        responseStatus = 403;
+        responseData = "Forbidden";
+        errorMessage = "Invalid verify token";
+        res.status(403).send("Forbidden");
+      }
+    } else {
+      console.log("Webhook verification failed - invalid mode:", mode);
+      responseStatus = 403;
+      responseData = "Forbidden";
+      errorMessage = `Invalid mode: ${mode}`;
+      res.status(403).send("Forbidden");
+    }
+  } catch (error: any) {
+    console.error("Webhook verification error:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.status(500).send("Internal Server Error");
+  } finally {
+    // Log the webhook verification attempt
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: 'verification',
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      event_type: typeof mode === 'string' ? mode : undefined
+    });
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook-data-logged:
+ *   post:
+ *     tags:
+ *       - Webhook
+ *     summary: WhatsApp Webhook Data Receiver (with Logging)
+ *     description: Alternative webhook endpoint that logs all incoming webhook data to database for analysis and debugging.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             description: WhatsApp webhook payload
+ *     responses:
+ *       200:
+ *         description: Webhook received and logged successfully
+ *       500:
+ *         description: Error processing webhook
+ */
+// POST /api/interakt/webhook-data-logged - Receive webhook updates with comprehensive logging
+router.post("/webhook-data-logged", async (req, res) => {
+  const startTime = Date.now();
+  const body = req.body;
+  console.log("Webhook received (logged):", JSON.stringify(body, null, 2));
+
+  // Determine webhook type and extract relevant data
+  const webhookType = WebhookLoggingService.determineWebhookType(req, body);
+  const extractedData = WebhookLoggingService.extractWebhookData(body);
+
+  let responseStatus = 200;
+  let responseData = "OK";
+  let errorMessage: string | undefined;
+
+  try {
+    // Handle different webhook events
+    if (body.object === "whatsapp_business_account") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach(async (change: any) => {
+          if (change.value?.messages) {
+            // Handle incoming messages
+            console.log("Incoming message:", change.value.messages);
+          }
+          if (change.value?.statuses) {
+            // Handle message status updates for settlement from suspense
+            const statuses = change.value.statuses as any[];
+            const phoneNumberId: string | undefined = change?.value?.metadata?.phone_number_id;
+            let userId: number | undefined;
+            try {
+              if (phoneNumberId) {
+                const r = await pool.query('SELECT user_id FROM whatsapp_setups WHERE phone_number_id = $1 LIMIT 1', [phoneNumberId]);
+                userId = r.rows[0]?.user_id;
+              }
+            } catch (e) {
+              console.warn('Failed to resolve user from phone_number_id:', phoneNumberId, e);
+            }
+
+            for (const st of statuses) {
+              const conversationId: string | undefined = st?.id || st?.message_id || st?.conversation?.id;
+              const status: string | undefined = st?.status;
+              if (!conversationId || !status) continue;
+
+              try {
+                // Idempotency guard: if billing log already finalized, skip
+                if (userId) {
+                  const row = await pool.query('SELECT id, billing_status FROM billing_logs WHERE user_id = $1 AND conversation_id = $2', [userId, conversationId]);
+                  const bl = row.rows[0];
+                  if (bl && (bl.billing_status === 'paid' || bl.billing_status === 'failed')) {
+                    continue;
+                  }
+                }
+
+                // Settle only for template sends using suspense model
+                if (userId) {
+                  if (status === 'failed') {
+                    // Refund from suspense back to wallet
+                    await WalletService.confirmMessageDelivery(userId, conversationId, false);
+                  } else if (status === 'sent') {
+                    // Mark paid (kept in suspense per current model)
+                    await WalletService.confirmMessageDelivery(userId, conversationId, true);
+                  }
+                }
+              } catch (e) {
+                console.warn('Settlement from webhook failed for', { userId, conversationId, status }, e);
+              }
+            }
+          }
+        });
+      });
+    }
+
+    // Handle tech partner events
+    if (body.object === "tech_partner") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach((change: any) => {
+          if (change.value?.event === "PARTNER_ADDED") {
+            console.log("PARTNER_ADDED event received:", change.value);
+            
+            // Trigger onboarding process
+            // You can either handle it here or call the separate endpoint
+            // For now, we'll just log it and let the separate endpoint handle it
+            console.log("Tech partner onboarding should be triggered for WABA:", change.value.waba_info?.waba_id);
+          }
+        });
+      });
+    }
+
+    res.sendStatus(200);
+  } catch (error: any) {
+    console.error("Error processing webhook:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.sendStatus(500);
+  } finally {
+    // Log the webhook data
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: webhookType,
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      body_data: body,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      ...extractedData
+    });
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook-logs:
+ *   get:
+ *     tags:
+ *       - Webhook
+ *     summary: Get Webhook Logs
+ *     description: Retrieve webhook logs for analysis and debugging. Supports filtering by webhook type, user, phone number, WABA ID, event type, and date range.
+ *     parameters:
+ *       - in: query
+ *         name: webhook_type
+ *         schema:
+ *           type: string
+ *           enum: [verification, message_status, incoming_message, tech_partner, unknown]
+ *         description: Filter by webhook type
+ *       - in: query
+ *         name: user_id
+ *         schema:
+ *           type: integer
+ *         description: Filter by user ID
+ *       - in: query
+ *         name: phone_number_id
+ *         schema:
+ *           type: string
+ *         description: Filter by phone number ID
+ *       - in: query
+ *         name: waba_id
+ *         schema:
+ *           type: string
+ *         description: Filter by WABA ID
+ *       - in: query
+ *         name: event_type
+ *         schema:
+ *           type: string
+ *         description: Filter by event type
+ *       - in: query
+ *         name: start_date
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Filter logs from this date
+ *       - in: query
+ *         name: end_date
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Filter logs until this date
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 1000
+ *           default: 100
+ *         description: Number of logs to return
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           default: 0
+ *         description: Number of logs to skip
+ *     responses:
+ *       200:
+ *         description: Webhook logs retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 logs:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       webhook_type:
+ *                         type: string
+ *                       http_method:
+ *                         type: string
+ *                       request_url:
+ *                         type: string
+ *                       query_params:
+ *                         type: object
+ *                       headers:
+ *                         type: object
+ *                       body_data:
+ *                         type: object
+ *                       response_status:
+ *                         type: integer
+ *                       response_data:
+ *                         type: string
+ *                       processing_time_ms:
+ *                         type: integer
+ *                       error_message:
+ *                         type: string
+ *                       user_id:
+ *                         type: integer
+ *                       phone_number_id:
+ *                         type: string
+ *                       waba_id:
+ *                         type: string
+ *                       message_id:
+ *                         type: string
+ *                       conversation_id:
+ *                         type: string
+ *                       event_type:
+ *                         type: string
+ *                       created_at:
+ *                         type: string
+ *                         format: date-time
+ *                       processed_at:
+ *                         type: string
+ *                         format: date-time
+ *                 total_count:
+ *                   type: integer
+ *                 filters_applied:
+ *                   type: object
+ */
+// GET /api/interakt/webhook-logs - Get webhook logs for analysis
+router.get("/webhook-logs", authenticateToken, async (req, res, next) => {
+  try {
+    const querySchema = z.object({
+      webhook_type: z.enum(['verification', 'message_status', 'incoming_message', 'tech_partner', 'unknown']).optional(),
+      user_id: z.coerce.number().optional(),
+      phone_number_id: z.string().optional(),
+      waba_id: z.string().optional(),
+      event_type: z.string().optional(),
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      limit: z.coerce.number().min(1).max(1000).default(100),
+      offset: z.coerce.number().min(0).default(0)
+    });
+
+    const filters = querySchema.parse(req.query);
+    
+    const logs = await WebhookLoggingService.getWebhookLogs(filters);
+    
+    // Get total count for pagination
+    const countQuery = `
+      SELECT COUNT(*) as total_count
+      FROM webhook_logs
+      WHERE 1=1
+      ${filters.webhook_type ? 'AND webhook_type = $1' : ''}
+      ${filters.user_id ? `AND user_id = $${filters.webhook_type ? '2' : '1'}` : ''}
+      ${filters.phone_number_id ? `AND phone_number_id = $${filters.webhook_type ? (filters.user_id ? '3' : '2') : (filters.user_id ? '2' : '1')}` : ''}
+      ${filters.waba_id ? `AND waba_id = $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+      ${filters.event_type ? `AND event_type = $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+      ${filters.start_date ? `AND created_at >= $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+      ${filters.end_date ? `AND created_at <= $${Object.keys(filters).filter(k => k !== 'limit' && k !== 'offset' && filters[k as keyof typeof filters]).length}` : ''}
+    `;
+
+    const countValues = Object.entries(filters)
+      .filter(([key]) => key !== 'limit' && key !== 'offset')
+      .map(([, value]) => value);
+
+    const countResult = await pool.query(countQuery, countValues);
+    const totalCount = parseInt(countResult.rows[0].total_count);
+
+    res.json({
+      logs,
+      total_count: totalCount,
+      filters_applied: filters,
+      pagination: {
+        limit: filters.limit,
+        offset: filters.offset,
+        has_more: filters.offset + filters.limit < totalCount
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/interakt/webhook-stats:
+ *   get:
+ *     tags:
+ *       - Webhook
+ *     summary: Get Webhook Statistics
+ *     description: Get webhook statistics for the last 7 days including success rates, processing times, and webhook type distribution.
+ *     responses:
+ *       200:
+ *         description: Webhook statistics retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 stats:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       webhook_type:
+ *                         type: string
+ *                       total_count:
+ *                         type: integer
+ *                       success_count:
+ *                         type: integer
+ *                       error_count:
+ *                         type: integer
+ *                       success_rate:
+ *                         type: number
+ *                         format: float
+ *                       avg_processing_time_ms:
+ *                         type: number
+ *                         format: float
+ *                       last_webhook_at:
+ *                         type: string
+ *                         format: date-time
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total_webhooks:
+ *                       type: integer
+ *                     total_success:
+ *                       type: integer
+ *                     total_errors:
+ *                       type: integer
+ *                     overall_success_rate:
+ *                       type: number
+ *                       format: float
+ *                     avg_processing_time_ms:
+ *                       type: number
+ *                       format: float
+ */
+// GET /api/interakt/webhook-stats - Get webhook statistics
+router.get("/webhook-stats", authenticateToken, async (req, res, next) => {
+  try {
+    const stats = await WebhookLoggingService.getWebhookStats();
+    
+    // Calculate summary statistics
+    const summary = {
+      total_webhooks: stats.reduce((sum, stat) => sum + parseInt(stat.total_count), 0),
+      total_success: stats.reduce((sum, stat) => sum + parseInt(stat.success_count), 0),
+      total_errors: stats.reduce((sum, stat) => sum + parseInt(stat.error_count), 0),
+      overall_success_rate: 0,
+      avg_processing_time_ms: 0
+    };
+
+    if (summary.total_webhooks > 0) {
+      summary.overall_success_rate = (summary.total_success / summary.total_webhooks) * 100;
+    }
+
+    const totalProcessingTime = stats.reduce((sum, stat) => {
+      const avgTime = parseFloat(stat.avg_processing_time_ms) || 0;
+      const count = parseInt(stat.total_count);
+      return sum + (avgTime * count);
+    }, 0);
+
+    if (summary.total_webhooks > 0) {
+      summary.avg_processing_time_ms = totalProcessingTime / summary.total_webhooks;
+    }
+
+    // Add success rate to each stat
+    const statsWithRates = stats.map(stat => ({
+      ...stat,
+      success_rate: parseInt(stat.total_count) > 0 
+        ? (parseInt(stat.success_count) / parseInt(stat.total_count)) * 100 
+        : 0
+    }));
+
+    res.json({
+      stats: statsWithRates,
+      summary
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/facebookWebhook:
+ *   get:
+ *     tags:
+ *       - Webhook
+ *     summary: Facebook WhatsApp Cloud API Webhook Verification
+ *     description: Facebook webhook verification endpoint for WhatsApp Cloud API. Verifies the webhook using hub.verify_token and returns hub.challenge for successful verification.
+ *     parameters:
+ *       - in: query
+ *         name: hub.mode
+ *         schema:
+ *           type: string
+ *         description: Must be "subscribe"
+ *         required: true
+ *         example: "subscribe"
+ *       - in: query
+ *         name: hub.challenge
+ *         schema:
+ *           type: string
+ *         description: Challenge string to verify webhook
+ *         required: true
+ *         example: "1234567890"
+ *       - in: query
+ *         name: hub.verify_token
+ *         schema:
+ *           type: string
+ *         description: Verification token to validate webhook
+ *         required: true
+ *         example: "DexterrTechnologies@12345"
+ *     responses:
+ *       200:
+ *         description: Webhook verified successfully - returns the hub.challenge value
+ *         content:
+ *           text/plain:
+ *             schema:
+ *               type: string
+ *               example: "1234567890"
+ *       403:
+ *         description: Webhook verification failed - invalid verify token
+ */
+// GET /api/facebookWebhook - Facebook WhatsApp Cloud API Webhook verification
+router.get("/facebookWebhook", async (req, res) => {
+  const startTime = Date.now();
+  const mode = req.query["hub.mode"];
+  const challenge = req.query["hub.challenge"];
+  const verifyToken = req.query["hub.verify_token"];
+
+  let responseStatus = 200;
+  let responseData: string | undefined = typeof challenge === 'string' ? challenge : undefined;
+  let errorMessage: string | undefined;
+
+  try {
+    // Check if this is a subscription verification request
+    if (mode === "subscribe" && verifyToken === "DexterrTechnologies@12345") {
+      console.log("Facebook webhook verified successfully");
+      res.status(200).send(challenge);
+    } else {
+      console.log("Facebook webhook verification failed");
+      responseStatus = 403;
+      responseData = "Forbidden";
+      errorMessage = "Invalid verification";
+      res.status(403).send("Forbidden");
+    }
+  } catch (error: any) {
+    console.error("Facebook webhook verification error:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.status(500).send("Internal Server Error");
+  } finally {
+    // Log the webhook verification attempt
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: 'verification',
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      event_type: typeof mode === 'string' ? mode : undefined
+    });
+  }
+});
+
+/**
+ * @openapi
+ * /api/facebookWebhook:
+ *   post:
+ *     tags:
+ *       - Webhook
+ *     summary: Facebook WhatsApp Cloud API Webhook Data Receiver
+ *     description: Receives webhook data from Facebook WhatsApp Cloud API including message status updates and incoming messages.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             description: Facebook webhook payload
+ *     responses:
+ *       200:
+ *         description: Webhook received successfully
+ *       500:
+ *         description: Error processing webhook
+ */
+// POST /api/facebookWebhook - Receive Facebook webhook updates
+router.post("/facebookWebhook", async (req, res) => {
+  const startTime = Date.now();
+  const body = req.body;
+  console.log("Facebook webhook received:", JSON.stringify(body, null, 2));
+
+  // Determine webhook type and extract relevant data
+  const webhookType = WebhookLoggingService.determineWebhookType(req, body);
+  const extractedData = WebhookLoggingService.extractWebhookData(body);
+
+  let responseStatus = 200;
+  let responseData = "OK";
+  let errorMessage: string | undefined;
+
+  try {
+    // Handle webhook events from Facebook
+    if (body.object === "whatsapp_business_account") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach(async (change: any) => {
+          if (change.value?.messages) {
+            console.log("Facebook incoming message:", change.value.messages);
+          }
+          if (change.value?.statuses) {
+            console.log("Facebook message status update:", change.value.statuses);
+          }
+        });
+      });
+    }
+
+    res.sendStatus(200);
+  } catch (error: any) {
+    console.error("Error processing Facebook webhook:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.sendStatus(500);
+  } finally {
+    // Log the webhook data
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: webhookType,
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      body_data: body,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      ...extractedData
+    });
   }
 });
 
