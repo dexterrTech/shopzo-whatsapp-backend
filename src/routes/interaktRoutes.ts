@@ -54,18 +54,46 @@ const router = Router();
  *               example: "123456"
  */
 // GET /api/interakt/interaktWebhook - Webhook verification
-router.get("/interaktWebhook", (req, res) => {
+router.get("/interaktWebhook", async (req, res) => {
+  const startTime = Date.now();
   const challenge = req.query["hub.challenge"];
 
-  console.log("Webhook verification attempt:", { challenge });
+  let responseStatus = 200;
+  let responseData: string | undefined = typeof challenge === 'string' ? challenge : "OK";
+  let errorMessage: string | undefined;
 
-  // According to Interakt documentation: simply return the hub.challenge value
-  if (challenge) {
-    console.log("Webhook verified - returning challenge:", challenge);
-    res.status(200).send(challenge);
-  } else {
-    console.log("Webhook verification failed - no challenge provided");
-    res.status(200).send("OK");
+  console.log("Interakt webhook verification attempt:", { challenge });
+
+  try {
+    // According to Interakt documentation: simply return the hub.challenge value
+    if (challenge) {
+      console.log("Interakt webhook verified - returning challenge:", challenge);
+      res.status(200).send(challenge);
+    } else {
+      console.log("Interakt webhook verification failed - no challenge provided");
+      res.status(200).send("OK");
+    }
+  } catch (error: any) {
+    console.error("Interakt webhook verification error:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.status(500).send("Internal Server Error");
+  } finally {
+    // Log the webhook verification attempt to database
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: 'verification',
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      event_type: 'interakt_verification'
+    });
   }
 });
 
@@ -89,8 +117,17 @@ router.get("/interaktWebhook", (req, res) => {
  */
 // POST /api/interakt/interaktWebhook - Receive webhook updates
 router.post("/interaktWebhook", async (req, res) => {
+  const startTime = Date.now();
   const body = req.body;
-  console.log("Webhook received:", JSON.stringify(body, null, 2));
+  console.log("Interakt webhook received:", JSON.stringify(body, null, 2));
+
+  // Determine webhook type and extract relevant data
+  const webhookType = WebhookLoggingService.determineWebhookType(req, body);
+  const extractedData = WebhookLoggingService.extractWebhookData(body);
+
+  let responseStatus = 200;
+  let responseData = "OK";
+  let errorMessage: string | undefined;
 
   try {
     // Handle different webhook events
@@ -99,7 +136,7 @@ router.post("/interaktWebhook", async (req, res) => {
         entry.changes?.forEach(async (change: any) => {
           if (change.value?.messages) {
             // Handle incoming messages
-            console.log("Incoming message:", change.value.messages);
+            console.log("Interakt incoming message:", change.value.messages);
           }
           if (change.value?.statuses) {
             // Handle message status updates for settlement from suspense
@@ -166,9 +203,28 @@ router.post("/interaktWebhook", async (req, res) => {
     }
 
     res.sendStatus(200);
-  } catch (error) {
-    console.error("Error processing webhook:", error);
+  } catch (error: any) {
+    console.error("Error processing Interakt webhook:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
     res.sendStatus(500);
+  } finally {
+    // Log the webhook data to database
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: webhookType,
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      body_data: body,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      ...extractedData
+    });
   }
 });
 

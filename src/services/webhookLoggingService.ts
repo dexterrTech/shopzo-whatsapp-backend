@@ -71,13 +71,20 @@ export class WebhookLoggingService {
       return 'verification';
     }
 
-    // Check if it's a tech partner event
+    // Check if it's a tech partner event (Interakt onboarding)
     if (body?.object === 'tech_partner') {
       return 'tech_partner';
     }
 
     // Check if it's a WhatsApp Business Account event
     if (body?.object === 'whatsapp_business_account') {
+      // Check for account updates (like PARTNER_ADDED)
+      if (body.entry?.some((entry: any) => 
+        entry.changes?.some((change: any) => change.field === 'account_update')
+      )) {
+        return 'tech_partner'; // Treat account updates as tech partner events
+      }
+
       // Check for message status updates
       if (body.entry?.some((entry: any) => 
         entry.changes?.some((change: any) => change.value?.statuses)
@@ -143,6 +150,23 @@ export class WebhookLoggingService {
           }
           if (change.value?.waba_info?.waba_id) {
             data.waba_id = change.value.waba_info.waba_id;
+          }
+        });
+      });
+    }
+
+    // Handle account_update events from whatsapp_business_account (PARTNER_ADDED)
+    if (body?.object === 'whatsapp_business_account') {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach((change: any) => {
+          if (change.field === 'account_update' && change.value?.event) {
+            data.event_type = change.value.event;
+            if (change.value.waba_info?.waba_id) {
+              data.waba_id = change.value.waba_info.waba_id;
+            }
+            if (change.value.waba_info?.phone_number_id) {
+              data.phone_number_id = change.value.waba_info.phone_number_id;
+            }
           }
         });
       });
