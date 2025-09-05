@@ -374,6 +374,70 @@ router.get('/all-users', authenticateToken, requireSuperAdmin, async (req, res) 
 
 /**
  * @swagger
+ * /api/wallet/settlement/{messageId}:
+ *   get:
+ *     summary: Get settlement status for a WhatsApp message
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: messageId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: WhatsApp message/conversation id (wamid...)
+ *     responses:
+ *       200:
+ *         description: Settlement status retrieved
+ *       404:
+ *         description: Billing log not found for this message id
+ */
+router.get('/settlement/:messageId', authenticateToken, async (req, res, next) => {
+  try {
+    const userId = req.user!.userId;
+    const messageId = req.params.messageId;
+
+    const blRes = await pool.query(
+      'SELECT id, conversation_id, billing_status, amount_paise, amount_currency, wallet_tx_id, created_at, updated_at FROM billing_logs WHERE user_id = $1 AND conversation_id = $2',
+      [userId, messageId]
+    );
+    if (blRes.rows.length === 0) {
+      return res.status(404).json({ error: true, message: 'No billing log found for this message id' });
+    }
+    const billing = blRes.rows[0];
+
+    const waRes = await pool.query(
+      'SELECT balance_paise, suspense_balance_paise, currency FROM wallet_accounts WHERE user_id = $1',
+      [userId]
+    );
+    const wallet = waRes.rows[0] || null;
+
+    const txRes = await pool.query(
+      `SELECT id, transaction_id, type, amount_paise, currency, status, details, balance_after_paise, suspense_balance_after_paise, created_at
+       FROM wallet_transactions
+       WHERE user_id = $1 AND (
+         id = COALESCE($2::int, -1) OR details LIKE $3
+       )
+       ORDER BY created_at ASC`,
+      [userId, billing.wallet_tx_id || null, `%${messageId}%`]
+    );
+
+    res.json({
+      message_id: billing.conversation_id,
+      billing_status: billing.billing_status,
+      amount_paise: billing.amount_paise,
+      amount_currency: billing.amount_currency,
+      wallet_balances: wallet,
+      transactions: txRes.rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @swagger
  * /api/wallet/verify:
  *   post:
  *     summary: Verify wallet and update WhatsApp setup status

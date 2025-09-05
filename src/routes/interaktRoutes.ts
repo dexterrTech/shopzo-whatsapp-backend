@@ -4,6 +4,7 @@ import { interaktClient } from "../services/interaktClient";
 import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
 import { upsertBillingLog, BillingCategory, chargeWalletForBilling, resolveUserPricePlan, basePriceForCategory } from "../services/billingService";
+import { WalletService } from "../services/walletService";
 import { authenticateToken } from "../middleware/authMiddleware";
 import { pool } from "../config/database";
 
@@ -94,53 +95,54 @@ router.post("/interaktWebhook", async (req, res) => {
     // Handle different webhook events
     if (body.object === "whatsapp_business_account") {
       body.entry?.forEach((entry: any) => {
-        entry.changes?.forEach((change: any) => {
+        entry.changes?.forEach(async (change: any) => {
           if (change.value?.messages) {
             // Handle incoming messages
             console.log("Incoming message:", change.value.messages);
           }
           if (change.value?.statuses) {
-            // Handle message status updates
-            console.log("Message status update:", change.value.statuses);
-            // Optional: basic example to upsert billing log when status indicates conversation charged
-            (async () => {
+            // Handle message status updates for settlement from suspense
+            const statuses = change.value.statuses as any[];
+            const phoneNumberId: string | undefined = change?.value?.metadata?.phone_number_id;
+            let userId: number | undefined;
+            try {
+              if (phoneNumberId) {
+                const r = await pool.query('SELECT user_id FROM whatsapp_setups WHERE phone_number_id = $1 LIMIT 1', [phoneNumberId]);
+                userId = r.rows[0]?.user_id;
+              }
+            } catch (e) {
+              console.warn('Failed to resolve user from phone_number_id:', phoneNumberId, e);
+            }
+
+            for (const st of statuses) {
+              const conversationId: string | undefined = st?.id || st?.message_id || st?.conversation?.id;
+              const status: string | undefined = st?.status;
+              if (!conversationId || !status) continue;
+
               try {
-                const statuses = change.value.statuses as any[];
-                for (const st of statuses) {
-                  const conversationId = st?.conversation?.id || st?.id || st?.message_id;
-                  const recipient = st?.recipient_id || st?.recipient || '';
-                  const categoryRaw: string | undefined = st?.conversation?.category;
-                  const category: BillingCategory | undefined = categoryRaw ? categoryRaw.toLowerCase() as BillingCategory : undefined;
-                  const timestamp = st?.timestamp ? new Date(parseInt(st.timestamp) * 1000) : new Date();
-                  // Resolve userId via phone_number_id or waba_id mapping
-                  const phoneId = st?.pricing?.billable ? (st?.id || st?.recipient_id) : undefined;
-                  const wabaId = (change as any)?.value?.metadata?.phone_number_id ? undefined : undefined;
-                  let userId: number | undefined;
-                  if (st?.phone_number_id) {
-                    const r = await pool.query('SELECT user_id FROM waba_sources WHERE phone_number_id = $1 LIMIT 1', [st.phone_number_id]);
-                    userId = r.rows[0]?.user_id;
-                  } else if ((change as any)?.value?.metadata?.phone_number_id) {
-                    const r = await pool.query('SELECT user_id FROM waba_sources WHERE phone_number_id = $1 LIMIT 1', [(change as any).value.metadata.phone_number_id]);
-                    userId = r.rows[0]?.user_id;
+                // Idempotency guard: if billing log already finalized, skip
+                if (userId) {
+                  const row = await pool.query('SELECT id, billing_status FROM billing_logs WHERE user_id = $1 AND conversation_id = $2', [userId, conversationId]);
+                  const bl = row.rows[0];
+                  if (bl && (bl.billing_status === 'paid' || bl.billing_status === 'failed')) {
+                    continue;
                   }
-                  if (conversationId && category) {
-                    if (userId) {
-                      await upsertBillingLog({
-                        userId,
-                        conversationId,
-                        category,
-                        recipientNumber: recipient,
-                        startTime: timestamp,
-                        endTime: timestamp,
-                        billingStatus: 'pending',
-                      });
-                    }
+                }
+
+                // Settle only for template sends using suspense model
+                if (userId) {
+                  if (status === 'failed') {
+                    // Refund from suspense back to wallet
+                    await WalletService.confirmMessageDelivery(userId, conversationId, false);
+                  } else if (status === 'sent') {
+                    // Mark paid (kept in suspense per current model)
+                    await WalletService.confirmMessageDelivery(userId, conversationId, true);
                   }
                 }
               } catch (e) {
-                console.warn('Billing upsert from webhook skipped:', e);
+                console.warn('Settlement from webhook failed for', { userId, conversationId, status }, e);
               }
-            })();
+            }
           }
         });
       });
