@@ -18,6 +18,8 @@ import templateRoutes from "./routes/templateRoutes";
 import sendTemplateRoutes from "./routes/sendTemplate";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
+import { pool } from "./config/database";
+import { WalletService } from "./services/walletService";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/spec";
 import { initDatabase } from "./config/database";
@@ -84,11 +86,90 @@ app.get("/api/interaktWebhook", (req, res) => {
 });
 
 // Mirror POST webhook on the same direct path so external services can POST here
-// This simply logs the payload and returns 200. The full-feature handler also exists at
-// /api/interakt/interaktWebhook inside interaktRoutes.
-app.post("/api/interaktWebhook", (req, res) => {
+// This calls the actual webhook processing logic from interaktRoutes
+app.post("/api/interaktWebhook", async (req, res) => {
   try {
     console.log("Direct webhook received (POST /api/interaktWebhook):", JSON.stringify(req.body, null, 2));
+    
+    // Call the actual webhook processing logic
+    const body = req.body;
+    
+    // Handle different webhook events
+    if (body.object === "whatsapp_business_account") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach(async (change: any) => {
+          if (change.value?.messages) {
+            // Handle incoming messages
+            console.log("Incoming message:", change.value.messages);
+          }
+          if (change.value?.statuses) {
+            // Handle message status updates for settlement from suspense
+            const statuses = change.value.statuses as any[];
+            const phoneNumberId: string | undefined = change?.value?.metadata?.phone_number_id;
+            let userId: number | undefined;
+            try {
+              if (phoneNumberId) {
+                const r = await pool.query('SELECT user_id FROM whatsapp_setups WHERE phone_number_id = $1 LIMIT 1', [phoneNumberId]);
+                userId = r.rows[0]?.user_id;
+              }
+            } catch (e) {
+              console.warn('Failed to resolve user from phone_number_id:', phoneNumberId, e);
+            }
+
+            for (const st of statuses) {
+              const conversationId: string | undefined = st?.id || st?.message_id || st?.conversation?.id;
+              const status: string | undefined = st?.status;
+              if (!conversationId || !status) continue;
+
+              console.log(`Processing webhook status: ${status} for conversation: ${conversationId}, user: ${userId}`);
+
+              try {
+                // Check for idempotency - avoid double processing
+                if (userId) {
+                  const existingLog = await pool.query(
+                    'SELECT billing_status FROM billing_logs WHERE conversation_id = $1 AND user_id = $2',
+                    [conversationId, userId]
+                  );
+                  
+                  if (existingLog.rows.length > 0 && 
+                      (existingLog.rows[0].billing_status === 'paid' || existingLog.rows[0].billing_status === 'failed')) {
+                    console.log(`Settlement already processed for conversation ${conversationId}, skipping`);
+                    continue;
+                  }
+                }
+
+                // Settle only for template sends using suspense model
+                if (userId) {
+                  if (status === 'failed') {
+                    // Refund from suspense back to wallet
+                    console.log(`Refunding failed message ${conversationId} for user ${userId}`);
+                    await WalletService.confirmMessageDelivery(userId, conversationId, false);
+                  } else if (status === 'sent') {
+                    // Mark paid (kept in suspense per current model)
+                    console.log(`Confirming sent message ${conversationId} for user ${userId}`);
+                    await WalletService.confirmMessageDelivery(userId, conversationId, true);
+                  }
+                }
+              } catch (e) {
+                console.warn('Settlement from webhook failed for', { userId, conversationId, status }, e);
+              }
+            }
+          }
+        });
+      });
+    }
+
+    // Handle tech partner events
+    if (body.object === "tech_partner") {
+      body.entry?.forEach((entry: any) => {
+        entry.changes?.forEach((change: any) => {
+          if (change.value?.event === "PARTNER_ADDED") {
+            console.log("PARTNER_ADDED event received:", change.value);
+          }
+        });
+      });
+    }
+    
     return res.sendStatus(200);
   } catch (e) {
     console.error("Direct webhook handler error:", e);
