@@ -227,10 +227,12 @@ export class WalletService {
       await client.query('BEGIN');
 
       // Find the suspense transaction
+      // Try both full conversation ID and truncated version (for backward compatibility)
       const transactionResult = await client.query(
         `SELECT * FROM wallet_transactions 
-         WHERE user_id = $1 AND type = 'SUSPENSE_DEBIT' AND details LIKE $2`,
-        [userId, `%${conversationId}%`]
+         WHERE user_id = $1 AND type = 'SUSPENSE_DEBIT' 
+         AND (transaction_id LIKE $2 OR transaction_id LIKE $3)`,
+        [userId, `%${conversationId}%`, `%${conversationId.substring(0, 50)}%`]
       );
 
       if (transactionResult.rows.length === 0) {

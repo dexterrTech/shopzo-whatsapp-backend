@@ -205,7 +205,7 @@ export async function holdWalletInSuspenseForBilling(params: {
       [nextBal, nextSuspense, params.userId]
     );
 
-    const txId = `HOLD-${params.conversationId}`.slice(0, 60);
+    const txId = `HOLD-${params.conversationId}`.slice(0, 100);
     const insTx = await pool.query(
       `INSERT INTO wallet_transactions (user_id, transaction_id, type, status, amount_paise, currency, details, balance_after_paise, suspense_balance_after_paise)
        VALUES ($1,$2,'SUSPENSE_DEBIT','completed',$3,$4,$5,$6,$7)
