@@ -191,6 +191,7 @@ app.use((req, res, next) => {
     /^\/api\/auth\/login$/,
     /^\/api\/interaktWebhook$/,
     /^\/api\/interakt\/interaktWebhook$/,
+    /^\/api\/facebookWebhook$/,
   ];
   if (req.method === 'OPTIONS') return next();
   if (allowlist.some((rx) => rx.test(req.path))) return next();
