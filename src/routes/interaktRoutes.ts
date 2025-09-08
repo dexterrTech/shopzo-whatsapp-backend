@@ -172,7 +172,7 @@ router.post("/interaktWebhook", async (req, res) => {
                   if (status === 'failed') {
                     // Refund from suspense back to wallet
                     await WalletService.confirmMessageDelivery(userId, conversationId, false);
-                  } else if (status === 'sent') {
+                  } else if (status === 'sent' || status === 'delivered' || status === 'read') {
                     // Mark paid (kept in suspense per current model)
                     await WalletService.confirmMessageDelivery(userId, conversationId, true);
                   }
@@ -2408,7 +2408,7 @@ router.post("/webhook-data-logged", async (req, res) => {
                   if (status === 'failed') {
                     // Refund from suspense back to wallet
                     await WalletService.confirmMessageDelivery(userId, conversationId, false);
-                  } else if (status === 'sent') {
+                  } else if (status === 'sent' || status === 'delivered' || status === 'read') {
                     // Mark paid (kept in suspense per current model)
                     await WalletService.confirmMessageDelivery(userId, conversationId, true);
                   }
