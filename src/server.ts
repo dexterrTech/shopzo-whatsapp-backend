@@ -18,13 +18,13 @@ import templateRoutes from "./routes/templateRoutes";
 import sendTemplateRoutes from "./routes/sendTemplate";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
+import { WebhookLoggingService } from "./services/webhookLoggingService";
 import { pool } from "./config/database";
 import { WalletService } from "./services/walletService";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/spec";
 import { initDatabase } from "./config/database";
 import { authenticateToken } from "./middleware/authMiddleware";
-import { WebhookLoggingService } from "./services/webhookLoggingService";
 
 const app = express();
 
@@ -225,12 +225,19 @@ app.post("/api/facebookWebhook", async (req, res) => {
 // Mirror POST webhook on the same direct path so external services can POST here
 // This calls the actual webhook processing logic from interaktRoutes
 app.post("/api/interaktWebhook", async (req, res) => {
+  const startTime = Date.now();
+  const body = req.body;
+  console.log("Direct webhook received (POST /api/interaktWebhook):", JSON.stringify(body, null, 2));
+
+  // Determine webhook type and extract relevant data
+  const webhookType = WebhookLoggingService.determineWebhookType(req, body);
+  const extractedData = WebhookLoggingService.extractWebhookData(body);
+
+  let responseStatus = 200;
+  let responseData = "OK";
+  let errorMessage: string | undefined;
+
   try {
-    console.log("Direct webhook received (POST /api/interaktWebhook):", JSON.stringify(req.body, null, 2));
-    
-    // Call the actual webhook processing logic
-    const body = req.body;
-    
     // Handle different webhook events
     if (body.object === "whatsapp_business_account") {
       body.entry?.forEach((entry: any) => {
@@ -306,11 +313,30 @@ app.post("/api/interaktWebhook", async (req, res) => {
         });
       });
     }
-    
-    return res.sendStatus(200);
-  } catch (e) {
-    console.error("Direct webhook handler error:", e);
-    return res.sendStatus(500);
+
+    res.sendStatus(200);
+  } catch (error: any) {
+    console.error("Direct webhook handler error:", error);
+    responseStatus = 500;
+    responseData = "Internal Server Error";
+    errorMessage = error.message;
+    res.sendStatus(500);
+  } finally {
+    // Log the webhook data to database
+    const processingTime = Date.now() - startTime;
+    await WebhookLoggingService.logWebhook({
+      webhook_type: webhookType,
+      http_method: req.method,
+      request_url: req.originalUrl,
+      query_params: req.query,
+      headers: req.headers,
+      body_data: body,
+      response_status: responseStatus,
+      response_data: responseData,
+      processing_time_ms: processingTime,
+      error_message: errorMessage,
+      ...extractedData
+    });
   }
 });
 
