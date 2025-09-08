@@ -180,6 +180,15 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_wallet_tx_status ON wallet_transactions(status);
     `);
 
+    // Safe add: phone_number on wallet_transactions for linking to recipient
+    await pool.query(`
+      ALTER TABLE wallet_transactions
+      ADD COLUMN IF NOT EXISTS phone_number VARCHAR(32);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_wallet_tx_phone ON wallet_transactions(phone_number);
+    `);
+
     // User-specific price plan assignments
     await pool.query(`
       CREATE TABLE IF NOT EXISTS user_price_plans (

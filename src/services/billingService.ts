@@ -189,6 +189,12 @@ export async function holdWalletInSuspenseForBilling(params: {
 
   await pool.query('BEGIN');
   try {
+    // Get recipient number from billing_logs for this conversation
+    const recRes = await pool.query(
+      `SELECT recipient_number FROM billing_logs WHERE user_id = $1 AND conversation_id = $2`,
+      [params.userId, params.conversationId]
+    );
+    const recipientNumber: string | null = recRes.rows[0]?.recipient_number || null;
     // Lock wallet row
     const balRes = await pool.query('SELECT balance_paise, suspense_balance_paise FROM wallet_accounts WHERE user_id = $1 FOR UPDATE', [params.userId]);
     const current = balRes.rows[0]?.balance_paise ?? 0;
@@ -207,11 +213,11 @@ export async function holdWalletInSuspenseForBilling(params: {
 
     const txId = `HOLD-${params.conversationId}`.slice(0, 100);
     const insTx = await pool.query(
-      `INSERT INTO wallet_transactions (user_id, transaction_id, type, status, amount_paise, currency, details, balance_after_paise, suspense_balance_after_paise)
-       VALUES ($1,$2,'SUSPENSE_DEBIT','completed',$3,$4,$5,$6,$7)
+      `INSERT INTO wallet_transactions (user_id, transaction_id, type, status, amount_paise, currency, details, balance_after_paise, suspense_balance_after_paise, phone_number)
+       VALUES ($1,$2,'SUSPENSE_DEBIT','completed',$3,$4,$5,$6,$7,$8)
        ON CONFLICT (transaction_id) DO NOTHING
        RETURNING id`,
-      [params.userId, txId, params.amountPaise, params.currency, 'Billing hold (campaign/message)', nextBal, nextSuspense]
+      [params.userId, txId, params.amountPaise, params.currency, 'Billing hold (campaign/message)', nextBal, nextSuspense, recipientNumber]
     );
     const walletTxId = insTx.rows[0]?.id;
     if (walletTxId) {

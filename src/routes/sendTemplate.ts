@@ -295,6 +295,7 @@ router.post("/send", authenticateToken, async (req, res) => {
       phoneNumbers: z.array(z.string()), // Changed from contacts to phoneNumbers
       templateName: z.string(),
       languageCode: z.string().min(2).max(5),
+      templateCategory: z.enum(['UTILITY','MARKETING','AUTHENTICATION','SERVICE']).optional(),
       parameters: z.array(z.any()).optional(),
     });
 
@@ -367,46 +368,94 @@ router.post("/send", authenticateToken, async (req, res) => {
       const campaign = campaignResult.rows[0];
 
              // Use the original template name as provided by the user
-       // Interakt expects the exact template name as it appears in their system
-       const templateName = body.templateName;
+      // Interakt expects the exact template name as it appears in their system
+      const templateName = body.templateName;
 
-       // First, let's check the template status from Interakt
-       console.log('Debug - Checking template status for:', templateName);
-       try {
-         const templateCheckResponse = await fetch(
-           `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/message_templates`,
-           {
-             method: 'GET',
-             headers: {
-               'x-access-token': accessToken,
-               'x-waba-id': wabaId,
-               'Content-Type': 'application/json'
-             }
-           }
-         );
+      // Determine category: prefer explicit from client, then campaign.template_id -> templates table,
+      // then templates by name, then Interakt fetch, then heuristics
+      let detectedCategory: 'utility' | 'marketing' | 'authentication' | 'service' | null = null;
+      if (body.templateCategory) {
+        const c = body.templateCategory.toLowerCase();
+        detectedCategory = (c as any) as 'utility' | 'marketing' | 'authentication' | 'service';
+      }
+      try {
+        if (campaign?.template_id) {
+          const tRes = await client.query('SELECT name, category FROM templates WHERE id = $1 LIMIT 1', [campaign.template_id]);
+          const t = tRes.rows[0];
+          if (t?.category) {
+            const c = String(t.category).toLowerCase();
+            if (c.includes('market')) detectedCategory = 'marketing';
+            else if (c.includes('auth')) detectedCategory = 'authentication';
+            else if (c.includes('service')) detectedCategory = 'service';
+            else detectedCategory = 'utility';
+          }
+        }
+      } catch (e) {
+        console.log('Debug - Campaign template category lookup failed (continuing):', e);
+      }
+      if (!detectedCategory) {
+        try {
+          const catRes = await client.query(
+            'SELECT category FROM templates WHERE name = $1 LIMIT 1',
+            [templateName]
+          );
+          const dbCat = String(catRes.rows[0]?.category || '').toLowerCase();
+          if (dbCat) {
+            if (dbCat.includes('market')) detectedCategory = 'marketing';
+            else if (dbCat.includes('auth')) detectedCategory = 'authentication';
+            else if (dbCat.includes('service')) detectedCategory = 'service';
+            else detectedCategory = 'utility';
+          }
+        } catch (e) {
+          console.log('Debug - DB template category lookup failed (continuing):', e);
+        }
+      }
 
-         if (templateCheckResponse.ok) {
-           const templateData = await templateCheckResponse.json();
-           console.log('Debug - Available templates:', JSON.stringify(templateData, null, 2));
-           
-           // Find our specific template
-           const ourTemplate = templateData.data?.find((t: any) => t.name === templateName);
-           if (ourTemplate) {
-             console.log('Debug - Our template status:', {
-               name: ourTemplate.name,
-               status: ourTemplate.status,
-               category: ourTemplate.category,
-               language: ourTemplate.language
-             });
-           } else {
-             console.log('Debug - Template not found in available templates');
-           }
-         } else {
-           console.log('Debug - Failed to fetch templates:', templateCheckResponse.status, templateCheckResponse.statusText);
-         }
-       } catch (error) {
-         console.log('Debug - Error checking template status:', error);
-       }
+      // First, let's check the template status from Interakt
+      console.log('Debug - Checking template status for:', templateName);
+      try {
+        const templateCheckResponse = await fetch(
+          `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/message_templates`,
+          {
+            method: 'GET',
+            headers: {
+              'x-access-token': accessToken,
+              'x-waba-id': wabaId,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        if (templateCheckResponse.ok) {
+          const templateData = await templateCheckResponse.json();
+          console.log('Debug - Available templates:', JSON.stringify(templateData, null, 2));
+          
+          // Find our specific template (support multiple possible response shapes)
+          const list = (templateData?.data?.data) || templateData?.data || templateData?.templates || [];
+          const ourTemplate = Array.isArray(list) ? list.find((t: any) => t?.name === templateName) : undefined;
+          if (ourTemplate) {
+            console.log('Debug - Our template status:', {
+              name: ourTemplate.name,
+              status: ourTemplate.status,
+              category: ourTemplate.category,
+              language: ourTemplate.language
+            });
+            if (!detectedCategory) {
+              const cat = String(ourTemplate.category || '').toLowerCase();
+              if (cat.includes('market')) detectedCategory = 'marketing';
+              else if (cat.includes('auth')) detectedCategory = 'authentication';
+              else if (cat.includes('service')) detectedCategory = 'service';
+              else detectedCategory = 'utility';
+            }
+          } else {
+            console.log('Debug - Template not found in available templates');
+          }
+        } else {
+          console.log('Debug - Failed to fetch templates:', templateCheckResponse.status, templateCheckResponse.statusText);
+        }
+      } catch (error) {
+        console.log('Debug - Error checking template status:', error);
+      }
 
       const results = [];
       const messageLogs = [];
@@ -541,36 +590,41 @@ router.post("/send", authenticateToken, async (req, res) => {
 
             messageLogs.push(messageLog);
 
-            // Billing: upsert billing log and hold funds in suspense for this message
-            try {
-              let category: 'utility' | 'marketing' | 'authentication' | 'service' = 'utility';
-              const tn = String(body.templateName || '').toLowerCase();
-              if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
-              else if (tn.includes('auth')) category = 'authentication';
-              else if (tn.includes('service')) category = 'service';
-
-              const ins = await upsertBillingLog({
-                userId,
-                conversationId: messageId,
-                category,
-                recipientNumber: formattedPhoneNumber,
-                startTime: new Date(),
-                endTime: new Date(),
-                billingStatus: 'pending',
-              });
-              console.log('Billing: upsertBillingLog success path result:', ins);
-              if (ins) {
-                const amtRes = await client.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
-                const row = amtRes.rows[0];
-                console.log('Billing: fetched amount for hold (success path):', row);
-                if (row) {
-                  await holdWalletInSuspenseForBilling({ userId, conversationId: messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
-                  console.log('Billing: holdWalletInSuspenseForBilling done (success path)');
+              // Billing: upsert billing log and hold funds in suspense for this message
+              try {
+                let category: 'utility' | 'marketing' | 'authentication' | 'service' = detectedCategory || 'utility';
+                let source: 'detected' | 'heuristic' = 'detected';
+                if (!detectedCategory) {
+                  const tn = String(body.templateName || '').toLowerCase();
+                  if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
+                  else if (tn.includes('auth')) category = 'authentication';
+                  else if (tn.includes('service')) category = 'service';
+                  source = 'heuristic';
                 }
+                console.log('Billing category chosen (success path):', { templateName: body.templateName, detectedCategory, category, source });
+
+                const ins = await upsertBillingLog({
+                  userId,
+                  conversationId: messageId,
+                  category,
+                  recipientNumber: formattedPhoneNumber,
+                  startTime: new Date(),
+                  endTime: new Date(),
+                  billingStatus: 'pending',
+                });
+                console.log('Billing: upsertBillingLog success path result:', ins);
+                if (ins) {
+                  const amtRes = await client.query('SELECT amount_paise, amount_currency FROM billing_logs WHERE id = $1', [ins.id]);
+                  const row = amtRes.rows[0];
+                  console.log('Billing: fetched amount for hold (success path):', row);
+                  if (row) {
+                    await holdWalletInSuspenseForBilling({ userId, conversationId: messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                    console.log('Billing: holdWalletInSuspenseForBilling done (success path)');
+                  }
+                }
+              } catch (e) {
+                console.warn('Billing hold failed (success path):', e);
               }
-            } catch (e) {
-              console.warn('Billing hold failed (success path):', e);
-            }
 
             results.push({
               contactId: phoneNumber, // Store the original phone number as contactId
@@ -597,11 +651,16 @@ router.post("/send", authenticateToken, async (req, res) => {
 
             // Billing: hold funds even if failed (charged on attempts)
             try {
-              let category: 'utility' | 'marketing' | 'authentication' | 'service' = 'utility';
-              const tn = String(body.templateName || '').toLowerCase();
-              if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
-              else if (tn.includes('auth')) category = 'authentication';
-              else if (tn.includes('service')) category = 'service';
+              let category: 'utility' | 'marketing' | 'authentication' | 'service' = detectedCategory || 'utility';
+              let source: 'detected' | 'heuristic' = 'detected';
+              if (!detectedCategory) {
+                const tn = String(body.templateName || '').toLowerCase();
+                if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
+                else if (tn.includes('auth')) category = 'authentication';
+                else if (tn.includes('service')) category = 'service';
+                source = 'heuristic';
+              }
+              console.log('Billing category chosen (failure path):', { templateName: body.templateName, detectedCategory, category, source });
 
               const ins = await upsertBillingLog({
                 userId,
@@ -653,11 +712,16 @@ router.post("/send", authenticateToken, async (req, res) => {
 
           // Billing: hold funds for attempted send when exception occurs
           try {
-            let category: 'utility' | 'marketing' | 'authentication' | 'service' = 'utility';
-            const tn = String(body.templateName || '').toLowerCase();
-            if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
-            else if (tn.includes('auth')) category = 'authentication';
-            else if (tn.includes('service')) category = 'service';
+            let category: 'utility' | 'marketing' | 'authentication' | 'service' = detectedCategory || 'utility';
+            let source: 'detected' | 'heuristic' = 'detected';
+            if (!detectedCategory) {
+              const tn = String(body.templateName || '').toLowerCase();
+              if (tn.includes('market') || tn.includes('promo')) category = 'marketing';
+              else if (tn.includes('auth')) category = 'authentication';
+              else if (tn.includes('service')) category = 'service';
+              source = 'heuristic';
+            }
+            console.log('Billing category chosen (exception path):', { templateName: body.templateName, detectedCategory, category, source });
 
             const ins = await upsertBillingLog({
               userId,

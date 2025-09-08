@@ -173,7 +173,8 @@ export class WalletService {
     userId: number,
     amountPaise: number,
     category: string,
-    conversationId: string
+    conversationId: string,
+    phoneNumber?: string
   ): Promise<WalletTransaction> {
     const client = await pool.connect();
     try {
@@ -200,9 +201,9 @@ export class WalletService {
       const transactionId = `TXN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const result = await client.query(
         `INSERT INTO wallet_transactions 
-         (user_id, transaction_id, type, amount_paise, currency, details, from_label, to_label, balance_after_paise, suspense_balance_after_paise) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [userId, transactionId, 'SUSPENSE_DEBIT', amountPaise, 'INR', `${category} message - ${conversationId}`, 'Wallet', 'Suspense Account', newBalance, newSuspenseBalance]
+         (user_id, transaction_id, type, amount_paise, currency, details, from_label, to_label, balance_after_paise, suspense_balance_after_paise, phone_number) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [userId, transactionId, 'SUSPENSE_DEBIT', amountPaise, 'INR', `${category} message - ${conversationId}`, 'Wallet', 'Suspense Account', newBalance, newSuspenseBalance, phoneNumber || null]
       );
 
       await client.query('COMMIT');
@@ -226,20 +227,17 @@ export class WalletService {
     try {
       await client.query('BEGIN');
 
-      // Find the suspense transaction
+      // Find the suspense transaction (best-effort)
       // Try both full conversation ID and truncated version (for backward compatibility)
       const transactionResult = await client.query(
         `SELECT * FROM wallet_transactions 
          WHERE user_id = $1 AND type = 'SUSPENSE_DEBIT' 
-         AND (transaction_id LIKE $2 OR transaction_id LIKE $3)`,
+         AND (transaction_id LIKE $2 OR transaction_id LIKE $3)
+         ORDER BY created_at DESC LIMIT 1`,
         [userId, `%${conversationId}%`, `%${conversationId.substring(0, 50)}%`]
       );
 
-      if (transactionResult.rows.length === 0) {
-        throw new Error('Suspense transaction not found');
-      }
-
-      const transaction = transactionResult.rows[0];
+      const transaction = transactionResult.rows[0] || null;
       const account = await this.getWalletAccount(userId);
 
       if (!account) {
@@ -250,32 +248,37 @@ export class WalletService {
         // Message was delivered, keep the amount in suspense (it will be deducted later)
         // Update billing log status to 'paid'
         await client.query(
-          'UPDATE billing_logs SET billing_status = $1, wallet_tx_id = $2 WHERE conversation_id = $3',
-          ['paid', transaction.id, conversationId]
+          'UPDATE billing_logs SET billing_status = $1, wallet_tx_id = COALESCE($2, wallet_tx_id) WHERE user_id = $3 AND conversation_id = $4',
+          ['paid', transaction ? transaction.id : null, userId, conversationId]
         );
       } else {
         // Message was not delivered, refund the amount
-        const newBalance = account.balance_paise + transaction.amount_paise;
-        const newSuspenseBalance = (account.suspense_balance_paise || 0) - transaction.amount_paise;
+        const amountPaise = transaction ? transaction.amount_paise : 0;
+        const newBalance = account.balance_paise + amountPaise;
+        const newSuspenseBalance = (account.suspense_balance_paise || 0) - amountPaise;
 
-        await client.query(
-          'UPDATE wallet_accounts SET balance_paise = $1, suspense_balance_paise = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $3',
-          [newBalance, newSuspenseBalance, userId]
-        );
+        if (transaction) {
+          await client.query(
+            'UPDATE wallet_accounts SET balance_paise = $1, suspense_balance_paise = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $3',
+            [newBalance, newSuspenseBalance, userId]
+          );
+        }
 
         // Create refund transaction
-        const refundTransactionId = `TXN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        await client.query(
-          `INSERT INTO wallet_transactions 
-           (user_id, transaction_id, type, amount_paise, currency, details, from_label, to_label, balance_after_paise, suspense_balance_after_paise) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [userId, refundTransactionId, 'SUSPENSE_REFUND', transaction.amount_paise, 'INR', `Refund for failed delivery - ${conversationId}`, 'Suspense Account', 'Wallet', newBalance, newSuspenseBalance]
-        );
+        if (transaction) {
+          const refundTransactionId = `TXN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          await client.query(
+            `INSERT INTO wallet_transactions 
+             (user_id, transaction_id, type, amount_paise, currency, details, from_label, to_label, balance_after_paise, suspense_balance_after_paise, phone_number) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [userId, refundTransactionId, 'SUSPENSE_REFUND', transaction.amount_paise, 'INR', `Refund for failed delivery - ${conversationId}`, 'Suspense Account', 'Wallet', newBalance, newSuspenseBalance, transaction.phone_number || null]
+          );
+        }
 
         // Update billing log status to 'failed'
         await client.query(
-          'UPDATE billing_logs SET billing_status = $1 WHERE conversation_id = $2',
-          ['failed', conversationId]
+          'UPDATE billing_logs SET billing_status = $1 WHERE user_id = $2 AND conversation_id = $3',
+          ['failed', userId, conversationId]
         );
       }
 

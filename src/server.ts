@@ -288,7 +288,7 @@ app.post("/api/interaktWebhook", async (req, res) => {
                     // Refund from suspense back to wallet
                     console.log(`Refunding failed message ${conversationId} for user ${userId}`);
                     await WalletService.confirmMessageDelivery(userId, conversationId, false);
-                  } else if (status === 'sent' || status === 'delivered') {
+                  } else if (status === 'sent' || status === 'delivered' || status === 'read') {
                     // Mark paid (kept in suspense per current model)
                     console.log(`Confirming ${status} message ${conversationId} for user ${userId}`);
                     await WalletService.confirmMessageDelivery(userId, conversationId, true);
