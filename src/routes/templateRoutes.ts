@@ -369,7 +369,17 @@ router.get("/:id", authenticateToken, async (req, res) => {
 
 // Helper function to sanitize template name for Interakt API
 function sanitizeTemplateName(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, '_');
+  // Lowercase
+  let out = (name || '').toLowerCase();
+  // Replace whitespace with underscore
+  out = out.replace(/\s+/g, '_');
+  // Remove all characters except [a-z0-9_]
+  out = out.replace(/[^a-z0-9_]/g, '_');
+  // Collapse multiple underscores
+  out = out.replace(/_+/g, '_');
+  // Trim leading/trailing underscores
+  out = out.replace(/^_+|_+$/g, '');
+  return out;
 }
 
 /**
@@ -519,48 +529,87 @@ router.post("/", authenticateToken, async (req, res) => {
       // Sanitize the template name for Interakt API
       const sanitizedName = sanitizeTemplateName(body.name);
       console.log('Original name:', body.name, 'Sanitized name:', sanitizedName);
+      // Validate sanitized name meets Meta constraints: lowercase letters, numbers, underscores; start with a letter
+      const nameIsValid = /^[a-z][a-z0-9_]*$/.test(sanitizedName);
+      if (!sanitizedName || !nameIsValid) {
+        return res.status(400).json({
+          error: true,
+          code: 'INVALID_TEMPLATE_NAME',
+          message: 'Template name must start with a letter and contain only lowercase letters, numbers, and underscores.',
+          details: { provided: body.name, sanitized: sanitizedName }
+        });
+      }
       
+      // Normalize components: ensure example shapes match placeholders
+      function countPlaceholders(text?: string): number {
+        if (!text) return 0;
+        const m = text.match(/\{\{\d+\}\}/g) || [];
+        const idx = Array.from(new Set(m.map(x => Number(x.replace(/[^\d]/g, "")))));
+        return idx.length === 0 ? 0 : Math.max(...idx);
+      }
+
+      function normalizeComponent(comp: any): any {
+        if (comp.type === 'BODY') {
+          const n = countPlaceholders(comp.text);
+          const out: any = { type: 'BODY', text: comp.text || '' };
+          if (n > 0) {
+            let vals: string[] | undefined;
+            if (comp.example?.body_text && Array.isArray(comp.example.body_text[0])) {
+              vals = (comp.example.body_text[0] as any[]).map(String);
+            }
+            if (!vals || vals.length !== n) {
+              vals = Array.from({ length: n }, (_, i) => `Example ${i + 1}`);
+            }
+            out.example = { body_text: [vals] };
+          }
+          return out;
+        }
+        if (comp.type === 'HEADER' && (comp.format === 'TEXT' || !comp.format)) {
+          const n = countPlaceholders(comp.text);
+          const out: any = { type: 'HEADER', format: 'TEXT', text: comp.text || '' };
+          if (n > 0) {
+            let vals: string[] | undefined;
+            if (comp.example?.header_text && Array.isArray(comp.example.header_text)) {
+              vals = (comp.example.header_text as any[]).map(String);
+            }
+            if (!vals || vals.length !== n) {
+              vals = Array.from({ length: n }, (_, i) => `Header ${i + 1}`);
+            }
+            out.example = { header_text: vals };
+          }
+          return out;
+        }
+        if (comp.type === 'HEADER' && comp.format && comp.format !== 'TEXT') {
+          // pass-through for IMAGE/VIDEO/DOCUMENT header
+          return {
+            type: 'HEADER',
+            format: comp.format,
+            text: comp.text || undefined,
+            example: comp.example
+          };
+        }
+        if (comp.type === 'FOOTER') {
+          return { type: 'FOOTER', text: comp.text || '' };
+        }
+        if (comp.type === 'BUTTONS') {
+          return { type: 'BUTTONS', buttons: comp.buttons || comp.example || [] };
+        }
+        return comp;
+      }
+
       // Prepare template payload for Interakt
       const templatePayload = {
         name: sanitizedName,
         language: body.language,
         category: body.category,
-        components: body.components.map(comp => {
-          if (comp.type === "HEADER" && comp.format) {
-            return {
-              type: comp.type,
-              format: comp.format,
-              text: comp.text || "",
-              example: comp.example
-            };
-          } else if (comp.type === "BODY") {
-            return {
-              type: comp.type,
-              text: comp.text || ""
-            };
-          } else if (comp.type === "FOOTER") {
-            return {
-              type: comp.type,
-              text: comp.text || ""
-            };
-          } else if (comp.type === "BUTTONS") {
-            return {
-              type: comp.type,
-              buttons: comp.example || []
-            };
-          }
-          return comp;
-        })
+        components: body.components.map(normalizeComponent)
       };
       
       console.log('Sending request to Interakt:', {
         url: `https://amped-express.interakt.ai/api/v17.0/${wabaId}/message_templates`,
-        payload: templatePayload,
-        headers: { 
-          'x-access-token': accessToken ? '***' : 'NOT_SET', 
-          'x-waba-id': wabaId 
-        }
+        headers: { 'x-access-token': accessToken ? '***' : 'NOT_SET', 'x-waba-id': wabaId }
       });
+      console.log('Interakt payload JSON:', JSON.stringify(templatePayload, null, 2));
       
       // Call Interakt API to create template
       const interaktResponse = await fetch(

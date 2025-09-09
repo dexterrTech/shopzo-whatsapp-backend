@@ -532,9 +532,38 @@ router.get('/setup-status', authenticateToken, async (req, res) => {
       });
     }
 
+    const row = result.rows[0];
+    const status: string = String(row.status || 'not_started');
+    // Derive step booleans from consolidated status value
+    const embeddedDone = [
+      'embedded_signup_completed',
+      'tp_signup_completed',
+      'templates_setup_completed',
+      'wallet_check_completed',
+      'setup_completed'
+    ].includes(status);
+    const tpDone = [
+      'tp_signup_completed',
+      'templates_setup_completed',
+      'wallet_check_completed',
+      'setup_completed'
+    ].includes(status);
+    const templatesDone = [
+      'templates_setup_completed',
+      'wallet_check_completed',
+      'setup_completed'
+    ].includes(status);
+    const walletVerified = status === 'wallet_check_completed' || status === 'setup_completed' || Boolean(row.wallet_verified);
+
     res.json({
       success: true,
-      data: result.rows[0]
+      data: {
+        ...row,
+        embedded_signup_completed: embeddedDone,
+        tp_signup_completed: tpDone,
+        templates_setup_completed: templatesDone,
+        wallet_verified: walletVerified,
+      }
     });
   } catch (error) {
     console.error('Error getting setup status:', error);
@@ -591,16 +620,16 @@ router.post('/update-setup-status', authenticateToken, async (req, res) => {
     if (setupCheck.rows.length === 0) {
       // Create a new whatsapp_setups record
       await pool.query(`
-        INSERT INTO whatsapp_setups (user_id, status, created_at, updated_at)
-        VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `, [userId, status || 'not_started']);
+        INSERT INTO whatsapp_setups (user_id, status, wallet_verified, created_at, updated_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [userId, status || 'not_started', wallet_verified === true]);
     } else {
       // Update existing record
       await pool.query(`
         UPDATE whatsapp_setups 
-        SET status = $1, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = $2
-      `, [status, userId]);
+        SET status = $1, wallet_verified = COALESCE($2, wallet_verified), updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $3
+      `, [status, wallet_verified, userId]);
     }
 
     res.json({

@@ -292,11 +292,24 @@ router.post("/send", authenticateToken, async (req, res) => {
 
     const bodySchema = z.object({
       campaignId: z.string(),
-      phoneNumbers: z.array(z.string()), // Changed from contacts to phoneNumbers
+      phoneNumbers: z.array(z.string()).optional(),
+      contactIds: z.array(z.string()).optional(),
       templateName: z.string(),
       languageCode: z.string().min(2).max(5),
       templateCategory: z.enum(['UTILITY','MARKETING','AUTHENTICATION','SERVICE']).optional(),
       parameters: z.array(z.any()).optional(),
+      headerMedia: z.object({
+        type: z.enum(['image','video','document']),
+        link: z.string().url().optional(),
+        id: z.string().optional(),
+      }).optional(),
+      bodyParams: z.array(z.string()).optional(),
+      variableMapping: z.record(z.string(), z.object({
+        field: z.string(),
+        fallback: z.string().optional().default("")
+      })).optional(),
+    }).refine((b) => (b.phoneNumbers && b.phoneNumbers.length) || (b.contactIds && b.contactIds.length), {
+      message: 'Provide phoneNumbers or contactIds'
     });
 
     const body = bodySchema.parse(req.body);
@@ -460,8 +473,30 @@ router.post("/send", authenticateToken, async (req, res) => {
       const results = [];
       const messageLogs = [];
 
+      // Resolve recipients
+      let recipientNumbers: string[] = Array.isArray(body.phoneNumbers) ? [...body.phoneNumbers] : [];
+      if ((!recipientNumbers || recipientNumbers.length === 0) && Array.isArray((body as any).contactIds) && (body as any).contactIds.length > 0) {
+        try {
+          const ids = (body as any).contactIds.map((id: string) => Number(id)).filter((n: number) => !Number.isNaN(n));
+          if (ids.length > 0) {
+            const placeholders = ids.map((_id: number, i: number) => `$${i + 1}`).join(',');
+            const q = `SELECT whatsapp_number, phone FROM contacts WHERE user_id = $${ids.length + 1} AND id IN (${placeholders})`;
+            const r = await client.query(q, [...ids, userId]);
+            recipientNumbers = r.rows
+              .map((row: any) => (row.whatsapp_number || row.phone || '').toString())
+              .filter((v: string) => v && v.trim().length > 0);
+          }
+        } catch (e) {
+          console.warn('Failed to resolve contactIds to phone numbers', e);
+        }
+      }
+      if (!recipientNumbers || recipientNumbers.length === 0) {
+        return res.status(400).json({ success: false, message: 'No recipients to send' });
+      }
+
              // Send messages to each contact
-       for (const phoneNumber of body.phoneNumbers) {
+      for (let i = 0; i < recipientNumbers.length; i++) {
+        const phoneNumber = recipientNumbers[i];
          // Ensure phone number is in international format
          let formattedPhoneNumber = phoneNumber;
          if (!formattedPhoneNumber.startsWith('+')) {
@@ -494,6 +529,56 @@ router.post("/send", authenticateToken, async (req, res) => {
 
           if (body.parameters && body.parameters.length > 0) {
             (messagePayload.template as any).components = body.parameters;
+          } else {
+            const builtComponents: any[] = [];
+            if (body.headerMedia) {
+              const mediaType = body.headerMedia.type; // image | video | document
+              const mediaPayload: any = {};
+              if (body.headerMedia.id) mediaPayload.id = body.headerMedia.id;
+              if (body.headerMedia.link) mediaPayload.link = body.headerMedia.link;
+              builtComponents.push({
+                type: 'header',
+                parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
+              });
+            }
+            // Resolve BODY parameters per recipient using variableMapping (preferred)
+            // else fall back to uniform bodyParams
+            let resolvedBodyParams: string[] | undefined;
+            if (body.variableMapping && Array.isArray((body as any).contactIds) && (body as any).contactIds.length > 0) {
+              try {
+                const cid = Number((body as any).contactIds[i]);
+                if (!Number.isNaN(cid)) {
+                  const cr = await client.query('SELECT * FROM contacts WHERE id = $1 AND user_id = $2 LIMIT 1', [cid, userId]);
+                  const contact = cr.rows[0] || {};
+                  const entries = Object.entries(body.variableMapping).sort(([a],[b]) => Number(a) - Number(b));
+                  const arr: string[] = [];
+                  for (const [k, cfg] of entries) {
+                    const n = Number(k);
+                    const val = contact[cfg.field as keyof typeof contact];
+                    const text = (val === undefined || val === null || String(val).trim() === '') ? (cfg.fallback || '') : String(val);
+                    arr[n - 1] = text;
+                  }
+                  resolvedBodyParams = arr;
+                }
+              } catch {}
+            }
+            if (!resolvedBodyParams && body.bodyParams && body.bodyParams.length > 0) {
+              resolvedBodyParams = body.bodyParams;
+            }
+            if (resolvedBodyParams && resolvedBodyParams.length > 0) {
+              const sanitizedParams = resolvedBodyParams.map((txt) => {
+                const s = (typeof txt === 'string' ? txt : '');
+                const t = s.trim();
+                return t.length > 0 ? t : 'there';
+              });
+              builtComponents.push({
+                type: 'body',
+                parameters: sanitizedParams.map((txt) => ({ type: 'text', text: txt }))
+              });
+            }
+            if (builtComponents.length > 0) {
+              (messagePayload.template as any).components = builtComponents;
+            }
           }
 
                                              // Call Interakt API to send template message
