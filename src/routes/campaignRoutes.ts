@@ -216,13 +216,25 @@ router.get("/export", authenticateToken, async (req, res, next) => {
  *                   description: Indicates if fallback data was used
  */
 // POST /api/campaigns/send-template
-router.post("/send-template", authenticateToken, async (req, res, next) => {
+// Global auth gate already applied in server.ts; avoid double auth here
+router.post("/send-template", async (req, res, next) => {
   try {
     const userId = req.user!.userId;
+    const mappingSchema = z.record(z.string(), z.object({
+      field: z.string(),
+      fallback: z.string().optional().default("")
+    })).optional();
     const bodySchema = z.object({
       templateId: z.string(),
-      phoneNumbers: z.array(z.string()), // Changed from contactIds to phoneNumbers
+      // Either contactIds or phoneNumbers can be provided
+      contactIds: z.array(z.string()).optional(),
+      phoneNumbers: z.array(z.string()).optional(),
+      // Flat parameters map (applies same values to all recipients)
       parameters: z.record(z.string(), z.string()).optional(),
+      // Variable mappings to resolve per contact (when using contactIds)
+      variableMapping: mappingSchema,
+    }).refine((b) => (b.contactIds && b.contactIds.length) || (b.phoneNumbers && b.phoneNumbers.length), {
+      message: 'Provide at least one of contactIds or phoneNumbers'
     });
 
     const body = bodySchema.parse(req.body);
@@ -245,17 +257,60 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
       }),
     });
 
-    // Prepare parameter mapping (POSITIONAL only)
-    const paramValues: string[] | undefined = body.parameters
+    // Prepare static parameter mapping (POSITIONAL only) if provided
+    const staticParamValues: string[] | undefined = body.parameters
       ? Object.keys(body.parameters)
           .sort()
           .map((k) => body.parameters![k])
       : undefined;
 
+    // Helper: resolve per-recipient values from variableMapping and contact record
+    async function resolveParamsForContact(contactId?: string): Promise<string[] | undefined> {
+      // If variableMapping is not provided, fall back to staticParamValues
+      if (!body.variableMapping) return staticParamValues;
+      if (!contactId) return staticParamValues;
+      try {
+        const idNum = Number(contactId);
+        const contact = await ContactService.getContactById(idNum, userId);
+        const byIndex: Array<string> = [];
+        const mappingEntries = Object.entries(body.variableMapping).sort(([a],[b]) => Number(a) - Number(b));
+        for (const [k, cfg] of mappingEntries) {
+          const idx = Number(k);
+          const fieldName = (cfg.field || '').trim();
+          let value: any = '';
+          if (contact && fieldName) {
+            value = (contact as any)[fieldName];
+          }
+          const resolved = (value === undefined || value === null || String(value).trim() === '') ? (cfg.fallback || '') : String(value);
+          byIndex[idx - 1] = resolved;
+        }
+        // If we didn't build anything, use static fallbacks
+        if (byIndex.length === 0) return staticParamValues;
+        return byIndex;
+      } catch {
+        return staticParamValues;
+      }
+    }
+
+    // Build recipient list from provided identifiers
+    const recipients: Array<{ phone: string; contactId?: string }> = [];
+    if (body.contactIds && body.contactIds.length) {
+      for (const cid of body.contactIds) {
+        // Fetch contact to get number
+        try {
+          const c = await ContactService.getContactById(Number(cid), userId);
+          const phone = (c?.whatsapp_number || c?.phone || '').toString();
+          if (phone) recipients.push({ phone, contactId: cid });
+        } catch {}
+      }
+    } else if (body.phoneNumbers && body.phoneNumbers.length) {
+      for (const p of body.phoneNumbers) recipients.push({ phone: p });
+    }
+
     const sendResults = await Promise.allSettled(
-      body.phoneNumbers.map(async (phoneNumber) => {
+      recipients.map(async ({ phone, contactId }) => {
         // Ensure phone number is in international format
-        let formattedPhoneNumber = phoneNumber;
+        let formattedPhoneNumber = phone;
         if (!formattedPhoneNumber.startsWith('+')) {
           if (formattedPhoneNumber.startsWith('91')) {
             formattedPhoneNumber = '+' + formattedPhoneNumber;
@@ -264,11 +319,12 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
           }
         }
 
-        const components = paramValues && paramValues.length > 0
+        const perRecipientParams = await resolveParamsForContact(contactId);
+        const components = perRecipientParams && perRecipientParams.length > 0
           ? [
               {
                 type: "body",
-                parameters: paramValues.map((text) => ({ type: "text", text })),
+                parameters: perRecipientParams.map((text) => ({ type: "text", text })),
               },
             ]
           : undefined;
@@ -343,7 +399,7 @@ router.post("/send-template", authenticateToken, async (req, res, next) => {
       success: failedCount === 0,
       messageIds,
       failedCount,
-      totalSent: body.phoneNumbers.length,
+      totalSent: recipients.length,
     });
   } catch (err) {
     next(err);
