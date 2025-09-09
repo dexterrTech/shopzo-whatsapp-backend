@@ -16,6 +16,7 @@ import walletRoutes from "./routes/walletRoutes";
 import whatsappRoutes from "./routes/whatsappRoutes";
 import templateRoutes from "./routes/templateRoutes";
 import sendTemplateRoutes from "./routes/sendTemplate";
+import uploadRoutes from "./routes/uploads";
 import { errorHandler } from "./middleware/errorHandler";
 import { numericPort, env } from "./config/env";
 import { WebhookLoggingService } from "./services/webhookLoggingService";
@@ -42,7 +43,7 @@ app.use(cors({
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'x-waba-id', 'file_offset'],
 }));
 
 app.use(helmet());
@@ -374,6 +375,7 @@ app.use("/api/send-message", sendMessageRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/templates", templateRoutes);
 app.use("/api/send-template", sendTemplateRoutes);
+app.use("/api/uploads", uploadRoutes);
 
 // Billing routes (after auth so we can protect with middleware)
 app.use("/api/billing", billingRoutes);

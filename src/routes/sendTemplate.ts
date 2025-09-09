@@ -297,6 +297,12 @@ router.post("/send", authenticateToken, async (req, res) => {
       languageCode: z.string().min(2).max(5),
       templateCategory: z.enum(['UTILITY','MARKETING','AUTHENTICATION','SERVICE']).optional(),
       parameters: z.array(z.any()).optional(),
+      headerMedia: z.object({
+        type: z.enum(['image','video','document']),
+        link: z.string().url().optional(),
+        id: z.string().optional(),
+      }).optional(),
+      bodyParams: z.array(z.string()).optional(),
     });
 
     const body = bodySchema.parse(req.body);
@@ -494,6 +500,27 @@ router.post("/send", authenticateToken, async (req, res) => {
 
           if (body.parameters && body.parameters.length > 0) {
             (messagePayload.template as any).components = body.parameters;
+          } else {
+            const builtComponents: any[] = [];
+            if (body.headerMedia) {
+              const mediaType = body.headerMedia.type; // image | video | document
+              const mediaPayload: any = {};
+              if (body.headerMedia.id) mediaPayload.id = body.headerMedia.id;
+              if (body.headerMedia.link) mediaPayload.link = body.headerMedia.link;
+              builtComponents.push({
+                type: 'header',
+                parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
+              });
+            }
+            if (body.bodyParams && body.bodyParams.length > 0) {
+              builtComponents.push({
+                type: 'body',
+                parameters: body.bodyParams.map((txt) => ({ type: 'text', text: txt }))
+              });
+            }
+            if (builtComponents.length > 0) {
+              (messagePayload.template as any).components = builtComponents;
+            }
           }
 
                                              // Call Interakt API to send template message
