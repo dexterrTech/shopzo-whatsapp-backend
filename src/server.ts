@@ -17,7 +17,9 @@ import whatsappRoutes from "./routes/whatsappRoutes";
 import templateRoutes from "./routes/templateRoutes";
 import sendTemplateRoutes from "./routes/sendTemplate";
 import uploadRoutes from "./routes/uploads";
+import bulkMessagingRoutes from "./routes/bulkMessagingRoutes";
 import { errorHandler } from "./middleware/errorHandler";
+import path from "path";
 import { numericPort, env } from "./config/env";
 import { WebhookLoggingService } from "./services/webhookLoggingService";
 import { pool } from "./config/database";
@@ -50,6 +52,15 @@ app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
+
+// Serve uploaded static files (CSV/XLSX) publicly for Interakt to fetch
+app.use("/files", (req, res, next) => {
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  next();
+},
+  // dist runtime: __dirname is .../dist. Go up one to project root of server build output
+  (express as any).static(path.resolve(__dirname, "..", "uploads"))
+);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString() });
@@ -376,6 +387,7 @@ app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/templates", templateRoutes);
 app.use("/api/send-template", sendTemplateRoutes);
 app.use("/api/uploads", uploadRoutes);
+app.use("/api/bulk-messages", bulkMessagingRoutes);
 
 // Billing routes (after auth so we can protect with middleware)
 app.use("/api/billing", billingRoutes);
