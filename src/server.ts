@@ -31,6 +31,10 @@ import { authenticateToken } from "./middleware/authMiddleware";
 
 const app = express();
 
+// Enable verbose logs only when LOG_DEBUG=true
+const LOG_DEBUG = String(process.env.LOG_DEBUG || '').toLowerCase() === 'true';
+const dlog = (...args: any[]) => { if (LOG_DEBUG) console.log(...args); };
+
 // CORS must run before helmet so preflight responses include CORS headers
 app.use(cors({
   origin: [
@@ -121,12 +125,12 @@ app.get("/api/test", (_req, res) => {
 });
 
 // Debug: Log route registration
-console.log("Registering routes...");
+dlog("Registering routes...");
 
 // Direct webhook route for simpler URL - do not require auth or verify token (per requirement)
 app.get("/api/interaktWebhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
-  console.log("Webhook verification attempt:", { challenge });
+  dlog("Webhook verification attempt:", { challenge });
   if (challenge) {
     return res.status(200).send(challenge as any);
   }
@@ -147,10 +151,10 @@ app.get("/api/facebookWebhook", async (req, res) => {
   try {
     // Check if this is a subscription verification request
     if (mode === "subscribe" && verifyToken === "DexterrTechnologies@12345") {
-      console.log("Facebook webhook verified successfully");
+      dlog("Facebook webhook verified successfully");
       res.status(200).send(challenge);
     } else {
-      console.log("Facebook webhook verification failed");
+      dlog("Facebook webhook verification failed");
       responseStatus = 403;
       responseData = "Forbidden";
       errorMessage = "Invalid verification";
@@ -184,7 +188,7 @@ app.get("/api/facebookWebhook", async (req, res) => {
 app.post("/api/facebookWebhook", async (req, res) => {
   const startTime = Date.now();
   const body = req.body;
-  console.log("Facebook webhook received:", JSON.stringify(body, null, 2));
+  dlog("Facebook webhook received:", JSON.stringify(body, null, 2));
 
   let responseStatus = 200;
   let responseData = "OK";
@@ -196,10 +200,10 @@ app.post("/api/facebookWebhook", async (req, res) => {
       body.entry?.forEach((entry: any) => {
         entry.changes?.forEach(async (change: any) => {
           if (change.value?.messages) {
-            console.log("Facebook incoming message:", change.value.messages);
+            dlog("Facebook incoming message:", change.value.messages);
           }
           if (change.value?.statuses) {
-            console.log("Facebook message status update:", change.value.statuses);
+            dlog("Facebook message status update:", change.value.statuses);
           }
         });
       });
@@ -239,7 +243,7 @@ app.post("/api/facebookWebhook", async (req, res) => {
 app.post("/api/interaktWebhook", async (req, res) => {
   const startTime = Date.now();
   const body = req.body;
-  console.log("Direct webhook received (POST /api/interaktWebhook):", JSON.stringify(body, null, 2));
+  dlog("Direct webhook received (POST /api/interaktWebhook):", JSON.stringify(body, null, 2));
 
   // Determine webhook type and extract relevant data
   const webhookType = WebhookLoggingService.determineWebhookType(req, body);
@@ -256,7 +260,7 @@ app.post("/api/interaktWebhook", async (req, res) => {
         entry.changes?.forEach(async (change: any) => {
           if (change.value?.messages) {
             // Handle incoming messages
-            console.log("Incoming message:", change.value.messages);
+            dlog("Incoming message:", change.value.messages);
           }
           if (change.value?.statuses) {
             // Handle message status updates for settlement from suspense
@@ -277,7 +281,7 @@ app.post("/api/interaktWebhook", async (req, res) => {
               const status: string | undefined = st?.status;
               if (!conversationId || !status) continue;
 
-              console.log(`Processing webhook status: ${status} for conversation: ${conversationId}, user: ${userId}`);
+              dlog(`Processing webhook status: ${status} for conversation: ${conversationId}, user: ${userId}`);
 
               try {
                 // Check for idempotency - avoid double processing
@@ -289,7 +293,7 @@ app.post("/api/interaktWebhook", async (req, res) => {
                   
                   if (existingLog.rows.length > 0 && 
                       (existingLog.rows[0].billing_status === 'paid' || existingLog.rows[0].billing_status === 'failed')) {
-                    console.log(`Settlement already processed for conversation ${conversationId}, skipping`);
+                    dlog(`Settlement already processed for conversation ${conversationId}, skipping`);
                     continue;
                   }
                 }
@@ -298,11 +302,11 @@ app.post("/api/interaktWebhook", async (req, res) => {
                 if (userId) {
                   if (status === 'failed') {
                     // Refund from suspense back to wallet
-                    console.log(`Refunding failed message ${conversationId} for user ${userId}`);
+                    dlog(`Refunding failed message ${conversationId} for user ${userId}`);
                     await WalletService.confirmMessageDelivery(userId, conversationId, false);
                   } else if (status === 'sent' || status === 'delivered' || status === 'read') {
                     // Mark paid (kept in suspense per current model)
-                    console.log(`Confirming ${status} message ${conversationId} for user ${userId}`);
+                    dlog(`Confirming ${status} message ${conversationId} for user ${userId}`);
                     await WalletService.confirmMessageDelivery(userId, conversationId, true);
                   }
                 }
@@ -320,7 +324,7 @@ app.post("/api/interaktWebhook", async (req, res) => {
       body.entry?.forEach((entry: any) => {
         entry.changes?.forEach((change: any) => {
           if (change.value?.event === "PARTNER_ADDED") {
-            console.log("PARTNER_ADDED event received:", change.value);
+            dlog("PARTNER_ADDED event received:", change.value);
           }
         });
       });
@@ -393,10 +397,10 @@ app.use("/api/bulk-messages", bulkMessagingRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/wallet", walletRoutes);
 
-console.log("Routes registered successfully");
+dlog("Routes registered successfully");
 
 // Debug: Log Swagger spec
-console.log("Swagger spec generated:", Object.keys((swaggerSpec as any).paths || {}).length, "endpoints");
+dlog("Swagger spec generated:", Object.keys((swaggerSpec as any).paths || {}).length, "endpoints");
 
 // Check if required environment variables are set
 const requiredEnvVars = [
@@ -407,14 +411,14 @@ const requiredEnvVars = [
 ];
 
 // Log server configuration
-console.log('🌐 Server Configuration:');
-console.log(`   Environment: ${env.NODE_ENV}`);
-console.log(`   Process NODE_ENV: ${process.env.NODE_ENV}`);
-console.log(`   Port: ${env.PORT} (numericPort: ${numericPort})`);
-console.log(`   Server URL: ${env.SERVER_URL || 'Not set (using localhost)'}`);
-console.log(`   Swagger will show: ${env.SERVER_URL ? `${env.SERVER_URL} and localhost:${env.PORT}` : `localhost:${env.PORT} only`}`);
-console.log(`   Running from: ${__dirname}`);
-console.log(`   Swagger will scan both .ts and .js files for compatibility`);
+dlog('🌐 Server Configuration:');
+dlog(`   Environment: ${env.NODE_ENV}`);
+dlog(`   Process NODE_ENV: ${process.env.NODE_ENV}`);
+dlog(`   Port: ${env.PORT} (numericPort: ${numericPort})`);
+dlog(`   Server URL: ${env.SERVER_URL || 'Not set (using localhost)'}`);
+dlog(`   Swagger will show: ${env.SERVER_URL ? `${env.SERVER_URL} and localhost:${env.PORT}` : `localhost:${env.PORT} only`}`);
+dlog(`   Running from: ${__dirname}`);
+dlog(`   Swagger will scan both .ts and .js files for compatibility`);
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingEnvVars.length > 0) {
@@ -440,7 +444,7 @@ async function startServer() {
   app.listen(numericPort, '0.0.0.0', () => {
     // eslint-disable-next-line no-console
     console.log(`Server listening on http://localhost:${numericPort}`);
-    console.log(`Swagger docs available at http://localhost:${numericPort}/docs and /api/docs`);
+    dlog(`Swagger docs available at http://localhost:${numericPort}/docs and /api/docs`);
   });
 
   try {
