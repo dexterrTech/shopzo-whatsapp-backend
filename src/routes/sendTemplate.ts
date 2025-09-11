@@ -303,8 +303,9 @@ router.post("/send", authenticateToken, async (req, res) => {
         link: z.string().url().optional(),
         id: z.string().optional(),
       }).optional(),
-      bodyParams: z.array(z.string()).optional(),
-      bodyParamsPerRecipient: z.array(z.array(z.string())).optional(),
+      // Accept null/undefined and coerce later
+      bodyParams: z.array(z.union([z.string(), z.null(), z.undefined()])).optional(),
+      bodyParamsPerRecipient: z.array(z.array(z.union([z.string(), z.null(), z.undefined()]))).optional(),
       variableMapping: z.record(z.string(), z.object({
         field: z.string(),
         fallback: z.string().optional().default("")
@@ -563,17 +564,47 @@ router.post("/send", authenticateToken, async (req, res) => {
                 }
               } catch {}
             }
-            if (!resolvedBodyParams && body.bodyParamsPerRecipient && Array.isArray(body.bodyParamsPerRecipient[i])) {
-              resolvedBodyParams = body.bodyParamsPerRecipient[i];
+            // Merge strategy: variableMapping wins for provided positions, but fill blanks from per-recipient or uniform bodyParams
+            if (body.bodyParamsPerRecipient && Array.isArray(body.bodyParamsPerRecipient[i])) {
+              const perRec = (body.bodyParamsPerRecipient[i] as any[]).map((v) => (v ?? '')) as string[];
+              if (!resolvedBodyParams) {
+                resolvedBodyParams = perRec;
+              } else {
+                for (let j = 0; j < perRec.length; j++) {
+                  if (resolvedBodyParams[j] === undefined || resolvedBodyParams[j] === '') {
+                    resolvedBodyParams[j] = perRec[j];
+                  }
+                }
+              }
             }
-            if (!resolvedBodyParams && body.bodyParams && body.bodyParams.length > 0) {
-              resolvedBodyParams = body.bodyParams;
+            if (body.bodyParams && body.bodyParams.length > 0) {
+              const uniform = (body.bodyParams as any[]).map((v) => (v ?? '')) as string[];
+              if (!resolvedBodyParams) {
+                resolvedBodyParams = uniform;
+              } else {
+                for (let j = 0; j < uniform.length; j++) {
+                  if (resolvedBodyParams[j] === undefined || resolvedBodyParams[j] === '') {
+                    resolvedBodyParams[j] = uniform[j];
+                  }
+                }
+              }
             }
             if (resolvedBodyParams && resolvedBodyParams.length > 0) {
-              const sanitizedParams = resolvedBodyParams.map((txt) => {
-                const s = (typeof txt === 'string' ? txt : '');
-                const t = s.trim();
-                return t.length > 0 ? t : 'there';
+              // Densify sparse arrays and coerce null/undefined to empty strings
+              const denseParams = Array.from({ length: resolvedBodyParams.length }, (_, idx) => {
+                const v = (resolvedBodyParams as any)[idx];
+                if (v === null || v === undefined) return '';
+                const s = typeof v === 'string' ? v : String(v);
+                return s;
+              });
+              // Support CONST: prefix for literal constants
+              const sanitizedParams = denseParams.map((txt) => {
+                const raw = typeof txt === 'string' ? txt : '';
+                const isConst = raw.startsWith('CONST:');
+                const val = isConst ? raw.replace(/^CONST:/, '') : raw;
+                const t = val.trim();
+                // Interakt rejects missing text value; ensure non-empty fallback
+                return t.length > 0 ? t : '-';
               });
               builtComponents.push({
                 type: 'body',
