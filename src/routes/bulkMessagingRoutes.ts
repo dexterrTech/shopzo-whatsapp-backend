@@ -12,6 +12,7 @@ import { pool } from "../config/database";
 import { numericPort, env } from "../config/env";
 import fs from "fs";
 import path from "path";
+import { dlog } from "../utils/logger";
 // duplicate import removed
 
 const router = Router();
@@ -195,7 +196,7 @@ router.post("/upload", authenticateToken, upload.single('file'), async (req, res
       });
 
     } catch (parseError) {
-      console.error('File parsing error:', parseError);
+      dlog('File parsing error:', parseError);
       res.status(400).json({ error: "Failed to parse file. Please ensure it's a valid CSV or Excel file." });
     }
 
@@ -403,7 +404,7 @@ router.post("/send", authenticateToken, async (req, res, next) => {
         }
       };
 
-      console.log('Interakt payload:', JSON.stringify(interaktPayload, null, 2));
+      dlog('Interakt payload:', JSON.stringify(interaktPayload, null, 2));
 
       // Call Interakt API
       const interaktResponse = await withFallback({
@@ -421,7 +422,7 @@ router.post("/send", authenticateToken, async (req, res, next) => {
           
           if (!response.ok) {
             const errorText = await response.text();
-            console.error('Interakt API error response:', errorText);
+            dlog('Interakt API error response:', errorText);
             throw new Error(`Interakt API error: ${response.status} ${response.statusText} - ${errorText}`);
           }
           
@@ -460,7 +461,7 @@ router.post("/send", authenticateToken, async (req, res, next) => {
           }
         }
       } catch (e) {
-        console.warn('Bulk messaging billing hold failed:', e);
+        dlog('Bulk messaging billing hold failed:', e);
       }
 
       res.json({
