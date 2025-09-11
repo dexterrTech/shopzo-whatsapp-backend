@@ -363,15 +363,18 @@ router.post("/send", authenticateToken, async (req, res, next) => {
       } catch {}
 
       if (body.templateParameters && Object.keys(body.templateParameters).length > 0) {
-        // explicit mapping: use provided values as column names
-        const bodyParams = Object.entries(body.templateParameters)
-          .map(([_, value]) => ({ type: "text", text: `{{${value}}}` }));
-        
-        if (bodyParams.length > 0) {
-          components.push({
-            type: "body",
-            parameters: bodyParams
-          });
+        // explicit mapping: support positional keys ('1','2',...) and constants (prefix CONST:)
+        const ordered = Object.entries(body.templateParameters)
+          .map(([k, v]) => ({ idx: Number(k), val: String(v) }))
+          .filter(x => !Number.isNaN(x.idx))
+          .sort((a,b) => a.idx - b.idx);
+        const params = ordered.map(({ val }) => {
+          const isConst = val.startsWith('CONST:');
+          const text = isConst ? val.replace(/^CONST:/, '') : `{{${val}}}`;
+          return { type: 'text', text } as any;
+        });
+        if (params.length > 0) {
+          components.push({ type: 'body', parameters: params });
         }
       } else if (bodyPlaceholders.length > 0) {
         // auto-map placeholders to CSV headers by exact name

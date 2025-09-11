@@ -304,6 +304,7 @@ router.post("/send", authenticateToken, async (req, res) => {
         id: z.string().optional(),
       }).optional(),
       bodyParams: z.array(z.string()).optional(),
+      bodyParamsPerRecipient: z.array(z.array(z.string())).optional(),
       variableMapping: z.record(z.string(), z.object({
         field: z.string(),
         fallback: z.string().optional().default("")
@@ -561,6 +562,9 @@ router.post("/send", authenticateToken, async (req, res) => {
                   resolvedBodyParams = arr;
                 }
               } catch {}
+            }
+            if (!resolvedBodyParams && body.bodyParamsPerRecipient && Array.isArray(body.bodyParamsPerRecipient[i])) {
+              resolvedBodyParams = body.bodyParamsPerRecipient[i];
             }
             if (!resolvedBodyParams && body.bodyParams && body.bodyParams.length > 0) {
               resolvedBodyParams = body.bodyParams;
