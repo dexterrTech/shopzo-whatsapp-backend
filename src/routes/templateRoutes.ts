@@ -835,6 +835,192 @@ router.post("/send", authenticateToken, async (req, res) => {
 /**
  * @swagger
  * /api/templates/{id}:
+ *   put:
+ *     tags:
+ *       - Templates
+ *     summary: Edit a template by ID
+ *     description: Edits a specific template by ID from Interakt using the user's WABA ID
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Template ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               category:
+ *                 type: string
+ *                 enum: ["MARKETING", "UTILITY", "AUTHENTICATION"]
+ *                 description: New category for the template
+ *               components:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     type:
+ *                       type: string
+ *                       enum: ["HEADER", "BODY", "FOOTER", "BUTTONS"]
+ *                     text:
+ *                       type: string
+ *                     format:
+ *                       type: string
+ *                       enum: ["TEXT", "IMAGE", "VIDEO", "DOCUMENT"]
+ *                     example:
+ *                       type: object
+ *                     buttons:
+ *                       type: array
+ *                 description: New components for the template
+ *     responses:
+ *       200:
+ *         description: Template edited successfully
+ *       400:
+ *         description: Bad request - missing WABA ID or invalid data
+ *       401:
+ *         description: Unauthorized - invalid or missing token
+ *       404:
+ *         description: Template not found
+ *       500:
+ *         description: Internal server error
+ */
+// PUT /api/templates/:id - Edit specific template by ID
+router.put("/:id", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: true, message: "User not authenticated" });
+    }
+
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+
+    const bodySchema = z.object({
+      name: z.string().optional(),
+      category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION"]).optional(),
+      components: z.array(z.object({
+        type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS"]),
+        text: z.string().optional(),
+        format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT"]).optional(),
+        example: z.any().optional(),
+        buttons: z.array(z.any()).optional(),
+      })).optional(),
+    });
+
+    const body = bodySchema.parse(req.body);
+
+    // Get user's WABA ID from database
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        'SELECT waba_id FROM whatsapp_setups WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [userId]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(400).json({ 
+          error: true, 
+          message: "WhatsApp setup not found. Please complete WhatsApp setup first." 
+        });
+      }
+      
+      const wabaId = result.rows[0].waba_id;
+      const accessToken = process.env.INTERAKT_ACCESS_TOKEN;
+
+      if (!accessToken) {
+        return res.status(500).json({ error: true, message: "Interakt access token not configured" });
+      }
+
+      // Build the Interakt API URL for template editing
+      const url = `https://amped-express.interakt.ai/api/v17.0/${wabaId}/message_templates/id/${id}`;
+
+      // Prepare the edit payload
+      const editPayload: any = {};
+      if (body.name) editPayload.name = body.name;
+      if (body.category) editPayload.category = body.category;
+      if (body.components) editPayload.components = body.components;
+      
+      console.log('Edit template payload:', editPayload);
+      console.log('Template ID:', id);
+
+      // Make request to Interakt API
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'x-access-token': accessToken,
+          'x-waba-id': wabaId,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(editPayload)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Interakt API error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
+        
+        let errorMessage = 'Failed to edit template from Interakt';
+        
+        if (response.status === 401) {
+          errorMessage = 'Unauthorized: Invalid access token or WABA ID';
+        } else if (response.status === 403) {
+          errorMessage = 'Forbidden: Access denied to this WABA';
+        } else if (response.status === 404) {
+          errorMessage = 'Template not found';
+        } else if (response.status >= 500) {
+          errorMessage = 'Interakt server error. Please try again later.';
+        }
+
+        return res.status(response.status).json({
+          error: true,
+          message: errorMessage,
+          details: errorText,
+          status: response.status
+        });
+      }
+
+      const editedTemplate = await response.json();
+
+      res.json({
+        success: true,
+        data: editedTemplate,
+        message: 'Template edited successfully'
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error: any) {
+    console.error('Error editing template:', error);
+    
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        error: true,
+        message: 'Invalid template data',
+        errors: error.errors
+      });
+    }
+
+    res.status(500).json({
+      error: true,
+      message: 'Internal server error while editing template',
+      error_message: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/templates/{id}:
  *   delete:
  *     tags:
  *       - Templates
@@ -870,6 +1056,7 @@ router.delete("/:id", authenticateToken, async (req, res) => {
     }
 
     const { id } = z.object({ id: z.string() }).parse(req.params);
+    const { name } = z.object({ name: z.string() }).parse(req.query);
 
     // Get user's WABA ID from database
     const client = await pool.connect();
@@ -893,8 +1080,8 @@ router.delete("/:id", authenticateToken, async (req, res) => {
         return res.status(500).json({ error: true, message: "Interakt access token not configured" });
       }
 
-      // Build the Interakt API URL for template deletion
-      const url = `https://amped-express.interakt.ai/api/v17.0/${wabaId}/message_templates/id/${id}`;
+      // Build the Interakt API URL for template deletion with both hsm_id and name
+      const url = `https://amped-express.interakt.ai/api/v17.0/${wabaId}/message_templates?hsm_id=${id}&name=${encodeURIComponent(name)}`;
 
       // Make request to Interakt API
       const response = await fetch(url, {

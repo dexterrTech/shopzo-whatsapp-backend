@@ -33,16 +33,20 @@ export interface UpdateContactData extends Partial<Omit<CreateContactData, 'user
 }
 
 export class ContactService {
-  static async getAllContacts(userId: number, limit?: number): Promise<Contact[]> {
+  static async getAllContacts(userId: number, limit?: number, offset?: number): Promise<Contact[]> {
     try {
-      console.log("ContactService: getAllContacts called with userId:", userId, "limit:", limit);
+      console.log("ContactService: getAllContacts called with userId:", userId, "limit:", limit, "offset:", offset);
       const query = `
         SELECT * FROM contacts 
         WHERE user_id = $1
         ORDER BY created_at DESC 
         ${limit ? 'LIMIT $2' : ''}
+        ${offset ? 'OFFSET $3' : ''}
       `;
-      const params = limit ? [userId, limit] : [userId];
+      const params = [];
+      params.push(userId);
+      if (limit) params.push(limit);
+      if (offset) params.push(offset);
       const result = await pool.query(query, params);
       return result.rows;
     } catch (error) {
@@ -81,9 +85,9 @@ export class ContactService {
     }
   }
 
-  static async searchContacts(searchTerm: string, userId: number, limit?: number): Promise<Contact[]> {
+  static async searchContacts(searchTerm: string, userId: number, limit?: number, offset?: number): Promise<Contact[]> {
     try {
-      console.log("ContactService: searchContacts called with searchTerm:", searchTerm, "userId:", userId, "limit:", limit);
+      console.log("ContactService: searchContacts called with searchTerm:", searchTerm, "userId:", userId, "limit:", limit, "offset:", offset);
       const query = `
         SELECT * FROM contacts 
         WHERE user_id = $1 AND (
@@ -94,9 +98,13 @@ export class ContactService {
         )
         ORDER BY created_at DESC
         ${limit ? 'LIMIT $3' : ''}
+        ${offset ? 'OFFSET $4' : ''}
       `;
       const searchPattern = `%${searchTerm}%`;
-      const params = limit ? [userId, searchPattern, limit] : [userId, searchPattern];
+      const params = [];
+      params.push(userId, searchPattern);
+      if (limit) params.push(limit);
+      if (offset) params.push(offset);
       const result = await pool.query(query, params);
       return result.rows;
     } catch (error) {
