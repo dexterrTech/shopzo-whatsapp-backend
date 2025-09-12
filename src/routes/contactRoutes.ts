@@ -162,6 +162,7 @@ router.get("/", authenticateToken, async (req, res, next) => {
     const userId = req.user!.userId;
     const querySchema = z.object({
       limit: z.coerce.number().int().min(1).max(200).optional(),
+      offset: z.coerce.number().int().min(0).optional(),
       search: z.string().optional(),
     });
 
@@ -169,9 +170,9 @@ router.get("/", authenticateToken, async (req, res, next) => {
 
     let contacts;
     if (query.search) {
-      contacts = await ContactService.searchContacts(query.search, userId, query.limit);
+      contacts = await ContactService.searchContacts(query.search, userId, query.limit, query.offset);
     } else {
-      contacts = await ContactService.getAllContacts(userId, query.limit);
+      contacts = await ContactService.getAllContacts(userId, query.limit, query.offset);
     }
 
     res.json({ data: contacts });
