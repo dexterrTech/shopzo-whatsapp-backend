@@ -158,10 +158,50 @@ router.post("/interaktWebhook", async (req, res) => {
               if (!conversationId || !status) continue;
 
               try {
+                // Diagnostic logging for traceability
+                console.log('[Webhook] status event', {
+                  status,
+                  conversationId,
+                  messageId: st?.message_id,
+                  convObjId: st?.conversation?.id,
+                  recipient: st?.recipient_id,
+                  phoneNumberId,
+                  userIdResolved: !!userId,
+                });
+
+                if (!userId) {
+                  console.warn('[Webhook] Skipping settlement - could not resolve userId from phone_number_id', { phoneNumberId, conversationId, status });
+                }
                 // Idempotency guard: if billing log already finalized, skip
                 if (userId) {
-                  const row = await pool.query('SELECT id, billing_status FROM billing_logs WHERE user_id = $1 AND conversation_id = $2', [userId, conversationId]);
-                  const bl = row.rows[0];
+                  let blRow = await pool.query('SELECT id, billing_status FROM billing_logs WHERE user_id = $1 AND conversation_id = $2', [userId, conversationId]);
+                  let bl = blRow.rows[0];
+                  if (!bl) {
+                    // Fallback: try to match the most recent pending row for this recipient number
+                    const recipient = (st?.recipient_id || '').replace(/\D/g, '');
+                    if (recipient) {
+                      const fallbackRes = await pool.query(
+                        `SELECT id, billing_status, conversation_id
+                         FROM billing_logs
+                         WHERE user_id = $1
+                           AND REGEXP_REPLACE(recipient_number, '[^0-9]', '', 'g') = $2
+                           AND billing_status = 'pending'
+                         ORDER BY created_at DESC NULLS LAST, id DESC
+                         LIMIT 1`,
+                        [userId, recipient]
+                      );
+                      const fb = fallbackRes.rows[0];
+                      if (fb) {
+                        console.warn('[Webhook] Fallback matched pending billing_log by recipient; updating conversation_id', { userId, oldConversationId: fb.conversation_id, newConversationId: conversationId, recipient });
+                        await pool.query('UPDATE billing_logs SET conversation_id = $1 WHERE id = $2', [conversationId, fb.id]);
+                        bl = { id: fb.id, billing_status: 'pending' } as any;
+                      } else {
+                        console.warn('[Webhook] No billing_log found for conversation/user; cannot settle', { userId, conversationId, status, recipient });
+                      }
+                    } else {
+                      console.warn('[Webhook] No billing_log found and no recipient for fallback', { userId, conversationId, status });
+                    }
+                  }
                   if (bl && (bl.billing_status === 'paid' || bl.billing_status === 'failed')) {
                     continue;
                   }
