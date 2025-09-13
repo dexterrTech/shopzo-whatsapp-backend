@@ -18,6 +18,7 @@ import templateRoutes from "./routes/templateRoutes";
 import sendTemplateRoutes from "./routes/sendTemplate";
 import uploadRoutes from "./routes/uploads";
 import bulkMessagingRoutes from "./routes/bulkMessagingRoutes";
+import dashboardRoutes from "./routes/dashboardRoutes";
 import { errorHandler } from "./middleware/errorHandler";
 import path from "path";
 import { numericPort, env } from "./config/env";
@@ -428,6 +429,7 @@ app.use("/api/templates", templateRoutes);
 app.use("/api/send-template", sendTemplateRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/bulk-messages", bulkMessagingRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 // Billing routes (after auth so we can protect with middleware)
 app.use("/api/billing", billingRoutes);
