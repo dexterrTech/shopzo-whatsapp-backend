@@ -13,12 +13,25 @@ export interface User {
   created_at: Date;
   last_login_at?: Date;
   aggregator_name?: string;
+  mobile_no?: string;
+  gst_required?: boolean;
+  gst_number?: string;
 }
 
 export interface RegisterUserData {
   name: string;
   email: string;
   password: string;
+}
+
+export interface CreateAggregatorData {
+  name: string;
+  email: string;
+  password: string;
+  mobile_no?: string;
+  gst_required?: boolean;
+  gst_number?: string;
+  aggregator_name?: string;
 }
 
 export interface LoginData {
@@ -68,8 +81,8 @@ export class AuthService {
   /**
    * Create an aggregator (super admin only caller should enforce)
    */
-  static async createAggregator(userData: RegisterUserData): Promise<Omit<User, 'password_hash'>> {
-    const { name, email, password } = userData;
+  static async createAggregator(userData: CreateAggregatorData): Promise<Omit<User, 'password_hash'>> {
+    const { name, email, password, mobile_no, gst_required = false, gst_number } = userData;
 
     const existingUser = await pool.query(
       'SELECT id FROM users_whatsapp WHERE email = $1',
@@ -83,10 +96,10 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(password, this.SALT_ROUNDS);
 
     const result = await pool.query(
-      `INSERT INTO users_whatsapp (name, email, password_hash, role, is_approved, is_active) 
-       VALUES ($1, $2, $3, $4, TRUE, TRUE) 
-       RETURNING id, name, email, role, is_approved, is_active, created_at`,
-      [name, email, passwordHash, 'aggregator']
+      `INSERT INTO users_whatsapp (name, email, password_hash, role, is_approved, is_active, mobile_no, gst_required, gst_number) 
+       VALUES ($1, $2, $3, $4, FALSE, FALSE, $5, $6, $7) 
+       RETURNING id, name, email, role, is_approved, is_active, created_at, mobile_no, gst_required, gst_number`,
+      [name, email, passwordHash, 'aggregator', mobile_no, gst_required, gst_number]
     );
 
     return result.rows[0];
@@ -313,6 +326,9 @@ export class AuthService {
         u.is_active,
         u.created_at,
         u.last_login_at,
+        u.mobile_no,
+        u.gst_required,
+        u.gst_number,
         CASE
           WHEN u.role = 'user' THEN agg.name
           ELSE NULL
