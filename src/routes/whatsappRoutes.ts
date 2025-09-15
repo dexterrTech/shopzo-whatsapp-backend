@@ -17,7 +17,7 @@ const embeddedSignupSchema = z.object({
 const exchangeTokenSchema = z.object({
   code: z.string().optional(),
   business_token: z.string().optional(),
-  redirect_uri: z.string().optional()
+  redirect_uri: z.string().url().optional()
 }).refine((d) => !!(d.code || d.business_token), { message: 'Provide either code or business_token' });
 
 const tpSignupSchema = z.object({
@@ -164,20 +164,30 @@ router.post('/exchange-token', authenticateToken, async (req, res) => {
     try {
       let businessToken = validatedData.business_token;
       if (!businessToken) {
-        const appId = env.APP_ID || '2524533311265577';
-        const appSecret = env.APP_SECRET;
+        // Hardcoded Facebook App credentials per request
+        const appId = '2524533311265577';
+        const appSecret = 'f752f6f45e9430e3dd936df1b4d1d83e';
         if (!appSecret) {
           return res.status(500).json({ success: false, message: 'Server missing APP_SECRET for token exchange' });
         }
         if (!validatedData.code) {
           return res.status(400).json({ success: false, message: 'Missing code for token exchange' });
         }
+        // Use exact redirect_uri sent by client if provided; do NOT override.
+        // Meta requires the redirect_uri to match exactly the OAuth dialog request.
+        const redirectUriToUse = validatedData.redirect_uri;
+        if (!redirectUriToUse) {
+          return res.status(400).json({ success: false, message: 'Missing redirect_uri. It must exactly match the one used in the OAuth dialog.' });
+        }
+        // Minimal debug log for troubleshooting (does not expose secrets)
+        console.log('[exchange-token] Using redirect_uri:', redirectUriToUse);
+
         const exchange = await interaktClient.exchangeCodeForBusinessToken({
-  appId,
-  appSecret,
-  code: validatedData.code,
-  redirectUri: validatedData.redirect_uri || "https://api.shopzo.app/auth/callback" // 👈 hardcoded here
-});
+          appId,
+          appSecret,
+          code: validatedData.code,
+          redirectUri: redirectUriToUse
+        });
 
         businessToken = exchange?.access_token;
       }
