@@ -173,20 +173,19 @@ router.post('/exchange-token', authenticateToken, async (req, res) => {
         if (!validatedData.code) {
           return res.status(400).json({ success: false, message: 'Missing code for token exchange' });
         }
-        // Use exact redirect_uri sent by client if provided; do NOT override.
-        // Meta requires the redirect_uri to match exactly the OAuth dialog request.
-        const redirectUriToUse = validatedData.redirect_uri;
-        if (!redirectUriToUse) {
-          return res.status(400).json({ success: false, message: 'Missing redirect_uri. It must exactly match the one used in the OAuth dialog.' });
+        // Pass through redirect_uri only if provided by client; JS SDK popup uses
+        // Facebook xd_arbiter for redirect, so omitting redirect_uri often works.
+        if (validatedData.redirect_uri) {
+          console.log('[exchange-token] Using redirect_uri:', validatedData.redirect_uri);
+        } else {
+          console.log('[exchange-token] No redirect_uri provided; attempting exchange without it');
         }
-        // Minimal debug log for troubleshooting (does not expose secrets)
-        console.log('[exchange-token] Using redirect_uri:', redirectUriToUse);
 
         const exchange = await interaktClient.exchangeCodeForBusinessToken({
           appId,
           appSecret,
           code: validatedData.code,
-          redirectUri: redirectUriToUse
+          redirectUri: validatedData.redirect_uri
         });
 
         businessToken = exchange?.access_token;
