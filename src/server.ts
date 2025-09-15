@@ -18,6 +18,7 @@ import templateRoutes from "./routes/templateRoutes";
 import sendTemplateRoutes from "./routes/sendTemplate";
 import uploadRoutes from "./routes/uploads";
 import bulkMessagingRoutes from "./routes/bulkMessagingRoutes";
+import dashboardRoutes from "./routes/dashboardRoutes";
 import { errorHandler } from "./middleware/errorHandler";
 import path from "path";
 import { numericPort, env } from "./config/env";
@@ -282,15 +283,51 @@ app.post("/api/interaktWebhook", async (req, res) => {
               if (!conversationId || !status) continue;
 
               dlog(`Processing webhook status: ${status} for conversation: ${conversationId}, user: ${userId}`);
+              console.log('[Webhook][Direct] status event', {
+                status,
+                conversationId,
+                messageId: st?.message_id,
+                convObjId: st?.conversation?.id,
+                recipient: st?.recipient_id,
+                phoneNumberId,
+                userIdResolved: !!userId,
+              });
+              if (!userId) {
+                console.warn('[Webhook][Direct] Skipping settlement - could not resolve userId from phone_number_id', { phoneNumberId, conversationId, status });
+              }
 
               try {
                 // Check for idempotency - avoid double processing
                 if (userId) {
-                  const existingLog = await pool.query(
-                    'SELECT billing_status FROM billing_logs WHERE conversation_id = $1 AND user_id = $2',
+                  let existingLog = await pool.query(
+                    'SELECT id, billing_status FROM billing_logs WHERE conversation_id = $1 AND user_id = $2',
                     [conversationId, userId]
                   );
-                  
+                  if (existingLog.rows.length === 0) {
+                    // Fallback: try matching by recipient number recent pending
+                    const recipient = (st?.recipient_id || '').replace(/\D/g, '');
+                    if (recipient) {
+                      const fb = await pool.query(
+                        `SELECT id, billing_status, conversation_id
+                         FROM billing_logs
+                         WHERE user_id = $1
+                           AND REGEXP_REPLACE(recipient_number, '[^0-9]', '', 'g') = $2
+                           AND billing_status = 'pending'
+                         ORDER BY created_at DESC NULLS LAST, id DESC
+                         LIMIT 1`,
+                        [userId, recipient]
+                      );
+                      if (fb.rows.length > 0) {
+                        console.warn('[Webhook][Direct] Fallback matched pending billing_log by recipient; updating conversation_id', { userId, oldConversationId: fb.rows[0].conversation_id, newConversationId: conversationId, recipient });
+                        await pool.query('UPDATE billing_logs SET conversation_id = $1 WHERE id = $2', [conversationId, fb.rows[0].id]);
+                        existingLog = { rows: [{ id: fb.rows[0].id, billing_status: 'pending' }] } as any;
+                      } else {
+                        console.warn('[Webhook][Direct] No billing_log found for conversation/user; cannot settle', { userId, conversationId, status, recipient });
+                      }
+                    } else {
+                      console.warn('[Webhook][Direct] No billing_log found and no recipient for fallback', { userId, conversationId, status });
+                    }
+                  }
                   if (existingLog.rows.length > 0 && 
                       (existingLog.rows[0].billing_status === 'paid' || existingLog.rows[0].billing_status === 'failed')) {
                     dlog(`Settlement already processed for conversation ${conversationId}, skipping`);
@@ -392,6 +429,7 @@ app.use("/api/templates", templateRoutes);
 app.use("/api/send-template", sendTemplateRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/bulk-messages", bulkMessagingRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 // Billing routes (after auth so we can protect with middleware)
 app.use("/api/billing", billingRoutes);

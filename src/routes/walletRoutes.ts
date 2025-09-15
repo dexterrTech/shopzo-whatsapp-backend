@@ -393,6 +393,88 @@ router.get('/all-users', authenticateToken, requireSuperAdmin, async (req, res) 
  *       404:
  *         description: Billing log not found for this message id
  */
+/**
+ * @swagger
+ * /api/wallet/super-admin/aggregator-transactions:
+ *   get:
+ *     summary: Get transactions between super admin and aggregators
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Super admin to aggregator transactions retrieved successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - insufficient permissions
+ */
+router.get('/super-admin/aggregator-transactions', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    // Get all aggregators
+    const aggregatorsRes = await pool.query(
+      'SELECT id, name, email FROM users_whatsapp WHERE role = $1',
+      ['aggregator']
+    );
+    const aggregatorIds = aggregatorsRes.rows.map(agg => agg.id);
+
+    if (aggregatorIds.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          totalTransactions: 0,
+          totalAmount: 0,
+          transactions: []
+        }
+      });
+    }
+
+    // Get all recharge transactions to aggregators from system wallet
+    const transactionsRes = await pool.query(
+      `SELECT 
+        wt.id,
+        wt.transaction_id,
+        wt.amount_paise,
+        wt.currency,
+        wt.details,
+        wt.created_at,
+        u.name as aggregator_name,
+        u.email as aggregator_email
+       FROM wallet_transactions wt
+       JOIN users_whatsapp u ON wt.user_id = u.id
+       WHERE wt.user_id = ANY($1) 
+         AND wt.type = 'RECHARGE'
+         AND wt.from_label = 'System Wallet'
+       ORDER BY wt.created_at DESC`,
+      [aggregatorIds]
+    );
+
+    const transactions = transactionsRes.rows.map(tx => ({
+      ...tx,
+      amount: tx.amount_paise / 100, // Convert paise to rupees
+      amount_paise: tx.amount_paise
+    }));
+
+    const totalAmount = transactions.reduce((sum, tx) => sum + tx.amount_paise, 0);
+
+    res.json({
+      success: true,
+      data: {
+        totalTransactions: transactions.length,
+        totalAmount: totalAmount / 100, // Convert to rupees
+        totalAmountPaise: totalAmount,
+        transactions
+      }
+    });
+  } catch (error) {
+    console.error('Error getting super admin aggregator transactions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get super admin aggregator transactions'
+    });
+  }
+});
+
 router.get('/settlement/:messageId', authenticateToken, async (req, res, next) => {
   try {
     const userId = req.user!.userId;

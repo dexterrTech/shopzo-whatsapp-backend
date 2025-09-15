@@ -29,6 +29,15 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_users_created_at ON users_whatsapp(created_at);
     `);
 
+    // Add new aggregator fields
+    await pool.query(`
+      ALTER TABLE users_whatsapp 
+      ADD COLUMN IF NOT EXISTS mobile_no VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS gst_required BOOLEAN DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS gst_number VARCHAR(15),
+      ADD COLUMN IF NOT EXISTS aggregator_name VARCHAR(255)
+    `);
+
     // Check if contacts table exists and has user_id column
     const tableCheck = await pool.query(`
       SELECT column_name 

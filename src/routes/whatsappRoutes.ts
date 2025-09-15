@@ -173,11 +173,12 @@ router.post('/exchange-token', authenticateToken, async (req, res) => {
           return res.status(400).json({ success: false, message: 'Missing code for token exchange' });
         }
         const exchange = await interaktClient.exchangeCodeForBusinessToken({
-          appId,
-          appSecret,
-          code: validatedData.code,
-          redirectUri: validatedData.redirect_uri || "https://api.shopzo.app/auth/callback" 
-        });
+  appId,
+  appSecret,
+  code: validatedData.code,
+  redirectUri: validatedData.redirect_uri || "https://api.shopzo.app/auth/callback" // 👈 hardcoded here
+});
+
         businessToken = exchange?.access_token;
       }
       if (!businessToken) {
