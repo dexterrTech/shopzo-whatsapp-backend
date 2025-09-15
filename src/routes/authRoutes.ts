@@ -27,6 +27,16 @@ const createUserSchema = z.object({
   password: z.string().min(6)
 });
 
+const createAggregatorSchema = z.object({
+  name: z.string().min(2),
+  email: z.string().email(),
+  password: z.string().min(6),
+  mobile_no: z.string().optional(),
+  gst_required: z.boolean().optional(),
+  gst_number: z.string().optional(),
+  aggregator_name: z.string().optional()
+});
+
 const setPasswordSchema = z.object({
   password: z.string().min(6)
 });
@@ -406,7 +416,7 @@ router.put('/role/:userId', authenticateToken, requireSuperAdmin, async (req, re
  */
 router.post('/create-aggregator', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
-    const validated = createUserSchema.parse(req.body);
+    const validated = createAggregatorSchema.parse(req.body);
     const user = await AuthService.createAggregator(validated);
     res.status(201).json({ success: true, message: 'Aggregator created', data: user });
   } catch (error) {
