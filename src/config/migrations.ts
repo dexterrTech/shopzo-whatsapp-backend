@@ -35,7 +35,12 @@ export async function runMigrations() {
       ADD COLUMN IF NOT EXISTS mobile_no VARCHAR(20),
       ADD COLUMN IF NOT EXISTS gst_required BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS gst_number VARCHAR(15),
-      ADD COLUMN IF NOT EXISTS aggregator_name VARCHAR(255)
+      ADD COLUMN IF NOT EXISTS aggregator_name VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS aggregator_address VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS verification_token VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT TRUE
     `);
 
     // Check if contacts table exists and has user_id column

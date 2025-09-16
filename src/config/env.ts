@@ -54,6 +54,25 @@ const EnvSchema = z.object({
   // JWT Configuration
   JWT_SECRET: z.string().default("change-me-dev-secret"),
   JWT_EXPIRES_IN: z.string().default("7d"),
+
+  // Email (SendGrid)
+  SENDGRID_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default("no-reply@yourdomain.com"),
+  API_BASE_URL: z.string().optional(),
+  FRONTEND_BASE_URL: z.string().optional(),
+
+  // SMTP (Shopzo/Dexterr)
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : undefined)),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_SECURE: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() === 'true' : undefined)),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

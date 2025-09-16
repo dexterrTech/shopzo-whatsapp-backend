@@ -406,6 +406,8 @@ app.use((req, res, next) => {
     /^\/api\/docs\/?/,
     /^\/api\/auth\/register$/,
     /^\/api\/auth\/login$/,
+    /^\/api\/auth\/verify$/, // allow email verification GET
+    /^\/api\/auth\/verify\/resend$/, // allow resend POST
     /^\/api\/interaktWebhook$/,
     /^\/api\/interakt\/interaktWebhook$/,
     /^\/api\/facebookWebhook$/,

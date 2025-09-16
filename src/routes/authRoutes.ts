@@ -30,11 +30,11 @@ const createUserSchema = z.object({
 const createAggregatorSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  password: z.string().min(6),
   mobile_no: z.string().optional(),
   gst_required: z.boolean().optional(),
   gst_number: z.string().optional(),
-  aggregator_name: z.string().optional()
+  aggregator_name: z.string().optional(),
+  aggregator_address: z.string().optional()
 });
 
 const setPasswordSchema = z.object({
@@ -419,6 +419,45 @@ router.post('/create-aggregator', authenticateToken, requireSuperAdmin, async (r
     const validated = createAggregatorSchema.parse(req.body);
     const user = await AuthService.createAggregator(validated);
     res.status(201).json({ success: true, message: 'Aggregator created', data: user });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    if (error instanceof Error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// Email verification endpoint
+router.get('/verify', async (req, res) => {
+  try {
+    const token = String(req.query.token || '');
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Missing token' });
+    }
+
+    const result = await AuthService.verifyEmailByToken(token);
+
+    // If frontend given, redirect; otherwise JSON
+    // Optionally set FRONTEND_BASE_URL in env
+    return res.json({ success: true, message: 'Email verified. You can now log in.', data: result });
+  } catch (error) {
+    if (error instanceof Error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// Resend verification link
+router.post('/verify/resend', async (req, res) => {
+  const schema = z.object({ email: z.string().email() });
+  try {
+    const { email } = schema.parse(req.body);
+    await AuthService.resendVerification(email);
+    res.json({ success: true, message: 'If your account is pending, a verification link has been sent.' });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
