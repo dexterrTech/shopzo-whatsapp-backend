@@ -1,4 +1,4 @@
-# WhatsApp Dashboard Server
+# WhatsApp Dashboard Server.
 
 This is the backend server for the WhatsApp Dashboard application with PostgreSQL database support.
 
