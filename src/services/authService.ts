@@ -2,6 +2,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool } from '../config/database';
 import { env } from '../config/env';
+import crypto from 'crypto';
+import { sendAggregatorInviteEmail, sendVerificationLink } from './emailService';
 
 export interface User {
   id: number;
@@ -27,11 +29,11 @@ export interface RegisterUserData {
 export interface CreateAggregatorData {
   name: string;
   email: string;
-  password: string;
   mobile_no?: string;
   gst_required?: boolean;
   gst_number?: string;
   aggregator_name?: string;
+  aggregator_address?: string;
 }
 
 export interface LoginData {
@@ -82,7 +84,7 @@ export class AuthService {
    * Create an aggregator (super admin only caller should enforce)
    */
   static async createAggregator(userData: CreateAggregatorData): Promise<Omit<User, 'password_hash'>> {
-    const { name, email, password, mobile_no, gst_required = false, gst_number } = userData;
+    const { name, email, mobile_no, gst_required = false, gst_number, aggregator_name, aggregator_address } = userData;
 
     const existingUser = await pool.query(
       'SELECT id FROM users_whatsapp WHERE email = $1',
@@ -93,14 +95,39 @@ export class AuthService {
       throw new Error('User with this email already exists');
     }
 
-    const passwordHash = await bcrypt.hash(password, this.SALT_ROUNDS);
+    // Generate random temporary password
+    const tempPassword = crypto.randomBytes(12).toString('base64url');
+    const passwordHash = await bcrypt.hash(tempPassword, this.SALT_ROUNDS);
+
+    // Create verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
     const result = await pool.query(
-      `INSERT INTO users_whatsapp (name, email, password_hash, role, is_approved, is_active, mobile_no, gst_required, gst_number) 
-       VALUES ($1, $2, $3, $4, FALSE, FALSE, $5, $6, $7) 
-       RETURNING id, name, email, role, is_approved, is_active, created_at, mobile_no, gst_required, gst_number`,
-      [name, email, passwordHash, 'aggregator', mobile_no, gst_required, gst_number]
+      `INSERT INTO users_whatsapp (name, email, password_hash, role, is_approved, is_active, mobile_no, gst_required, gst_number, aggregator_name, aggregator_address, verification_token, verification_expires_at, must_change_password)
+       VALUES ($1, $2, $3, $4, FALSE, FALSE, $5, $6, $7, $8, $9, $10, $11, TRUE)
+       RETURNING id, name, email, role, is_approved, is_active, created_at, mobile_no, gst_required, gst_number, aggregator_name, aggregator_address, verification_token, verification_expires_at`,
+      [name, email, passwordHash, 'aggregator', mobile_no, gst_required, gst_number, aggregator_name || null, aggregator_address || null, verificationToken, verificationExpiresAt]
     );
+
+    // Send verification email with credentials
+    try {
+      const feBase = env.FRONTEND_BASE_URL;
+      const beBase = env.API_BASE_URL || env.SERVER_URL || '';
+      const verifyUrl = feBase && feBase.length
+        ? `${feBase.replace(/\/$/, '')}/verify?token=${verificationToken}`
+        : `${beBase.replace(/\/$/, '')}/api/auth/verify?token=${verificationToken}`;
+      await sendAggregatorInviteEmail({
+        to: email,
+        tempPassword,
+        verifyUrl,
+        username: email,
+        aggregatorName: name,
+      });
+    } catch (e) {
+      // Do not fail creation if email send fails; log and continue
+      console.warn('Failed to send aggregator invite email:', (e as any)?.message || e);
+    }
 
     return result.rows[0];
   }
@@ -251,6 +278,10 @@ export class AuthService {
     if (!user.is_approved) {
       throw new Error('Account is not approved yet. Please wait for admin approval.');
     }
+    // Require email verification only for aggregators
+    if (user.role === 'aggregator' && !user.email_verified_at) {
+      throw new Error('Email not verified. Please check your inbox for the verification link.');
+    }
 
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
@@ -278,6 +309,54 @@ export class AuthService {
       user: userWithoutPassword,
       token
     };
+  }
+
+  static async verifyEmailByToken(token: string): Promise<{ id: number; email: string }> {
+    const res = await pool.query(
+      `SELECT id, email, verification_expires_at FROM users_whatsapp WHERE verification_token = $1 LIMIT 1`,
+      [token]
+    );
+    if (res.rows.length === 0) {
+      throw new Error('Invalid verification token');
+    }
+    const row = res.rows[0];
+    if (row.verification_expires_at && new Date(row.verification_expires_at).getTime() < Date.now()) {
+      throw new Error('Verification token has expired');
+    }
+    await pool.query(
+      `UPDATE users_whatsapp 
+       SET is_active = TRUE, is_approved = TRUE, email_verified_at = CURRENT_TIMESTAMP, verification_token = NULL, verification_expires_at = NULL
+       WHERE id = $1`,
+      [row.id]
+    );
+    return { id: row.id, email: row.email };
+  }
+
+  static async resendVerification(email: string): Promise<void> {
+    const userRes = await pool.query(
+      `SELECT id, email, email_verified_at FROM users_whatsapp WHERE email = $1 LIMIT 1`,
+      [email]
+    );
+    if (userRes.rows.length === 0) {
+      // Do not leak existence
+      return;
+    }
+    const user = userRes.rows[0];
+    if (user.email_verified_at) {
+      return; // Already verified
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await pool.query(
+      `UPDATE users_whatsapp SET verification_token = $1, verification_expires_at = $2 WHERE id = $3`,
+      [token, expires, user.id]
+    );
+    const feBase = env.FRONTEND_BASE_URL;
+    const beBase = env.API_BASE_URL || env.SERVER_URL || '';
+    const verifyUrl = feBase && feBase.length
+      ? `${feBase.replace(/\/$/, '')}/verify?token=${token}`
+      : `${beBase.replace(/\/$/, '')}/api/auth/verify?token=${token}`;
+    await sendVerificationLink(email, verifyUrl);
   }
 
   /**

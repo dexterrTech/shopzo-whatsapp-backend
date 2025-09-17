@@ -35,7 +35,12 @@ export async function runMigrations() {
       ADD COLUMN IF NOT EXISTS mobile_no VARCHAR(20),
       ADD COLUMN IF NOT EXISTS gst_required BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS gst_number VARCHAR(15),
-      ADD COLUMN IF NOT EXISTS aggregator_name VARCHAR(255)
+      ADD COLUMN IF NOT EXISTS aggregator_name VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS aggregator_address VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS verification_token VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS verification_expires_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT TRUE
     `);
 
     // Check if contacts table exists and has user_id column
@@ -137,14 +142,10 @@ export async function runMigrations() {
       CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_logs_conversation_per_user ON billing_logs(user_id, conversation_id);
     `);
 
-    // Safe column adds for billing logs
+    // Safe column adds for billing logs (wallet_tx_id will be added AFTER wallet_transactions is created)
     await pool.query(`
       ALTER TABLE billing_logs
       ADD COLUMN IF NOT EXISTS price_plan_id INTEGER REFERENCES price_plans(id);
-    `);
-    await pool.query(`
-      ALTER TABLE billing_logs
-      ADD COLUMN IF NOT EXISTS wallet_tx_id INTEGER REFERENCES wallet_transactions(id);
     `);
     
     // Wallet accounts and transactions
@@ -196,6 +197,12 @@ export async function runMigrations() {
     `);
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_wallet_tx_phone ON wallet_transactions(phone_number);
+    `);
+
+    // Now that wallet_transactions exists, safely add FK column on billing_logs
+    await pool.query(`
+      ALTER TABLE billing_logs
+      ADD COLUMN IF NOT EXISTS wallet_tx_id INTEGER REFERENCES wallet_transactions(id);
     `);
 
     // User-specific price plan assignments

@@ -407,10 +407,11 @@ router.post('/send-test-message', authenticateToken, async (req, res) => {
       return res.status(401).json({ success: false, message: 'Authentication required' });
     }
 
-    // Load business token and phone number from DB
-    const setup = await pool.query('SELECT business_token, phone_number_id FROM whatsapp_setups WHERE user_id = $1', [userId]);
+    // Load business token, phone number and waba from DB
+    const setup = await pool.query('SELECT business_token, phone_number_id, waba_id FROM whatsapp_setups WHERE user_id = $1', [userId]);
     const businessToken: string | null = setup.rows?.[0]?.business_token || null;
     const phoneNumberId: string = (validatedData.phone_number_id || setup.rows?.[0]?.phone_number_id);
+    const wabaIdFromDb: string | undefined = setup.rows?.[0]?.waba_id;
     if (!businessToken) {
       return res.status(400).json({ success: false, message: 'Business token not found. Exchange token first.' });
     }
@@ -418,12 +419,18 @@ router.post('/send-test-message', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Phone number ID not found.' });
     }
 
+    // Guard: Common mistake is using WABA ID instead of phone number ID
+    if (/^\d+$/.test(phoneNumberId) && phoneNumberId.length < 12) {
+      console.warn('[send-test-message] phone_number_id looks too short. Did you pass a WABA ID instead of phone number ID?', { phoneNumberId });
+    }
+
     // Optionally subscribe app to WABA (best effort)
     try {
-      if (validatedData.waba_id) {
-        await interaktClient.subscribeAppToWaba({ wabaId: validatedData.waba_id, businessToken });
+      const wabaForSub = validatedData.waba_id || wabaIdFromDb;
+      if (wabaForSub) {
+        await interaktClient.subscribeAppToWaba({ wabaId: wabaForSub, businessToken });
       }
-    } catch {}
+    } catch { }
 
     // Send a text message if client provided destination
     const to = (req.body as any)?.to as string | undefined;
