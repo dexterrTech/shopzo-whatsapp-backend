@@ -1,9 +1,10 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool } from '../config/database';
+import { PrismaClient } from '@prisma/client';
 import { env } from '../config/env';
 import crypto from 'crypto';
-import { sendAggregatorInviteEmail, sendVerificationLink } from './emailService';
+import { sendAggregatorInviteEmail, sendVerificationLink, sendBusinessInviteEmail } from './emailService';
 
 export interface User {
   id: number;
@@ -24,6 +25,17 @@ export interface RegisterUserData {
   name: string;
   email: string;
   password: string;
+}
+
+export interface CreateBusinessData {
+  name: string; // business name
+  email: string;
+  mobile_no?: string;
+  gst_required?: boolean;
+  gst_number?: string;
+  business_contact_name?: string;
+  business_contact_phone?: string;
+  business_address?: string;
 }
 
 export interface CreateAggregatorData {
@@ -49,6 +61,7 @@ export interface JWTPayload {
 
 export class AuthService {
   private static readonly SALT_ROUNDS = 12;
+  private static prisma = new PrismaClient();
 
   /**
    * Register a new user
@@ -57,12 +70,8 @@ export class AuthService {
     const { name, email, password } = userData;
 
     // Check if user already exists
-    const existingUser = await pool.query(
-      'SELECT id FROM users_whatsapp WHERE email = $1',
-      [email]
-    );
-
-    if (existingUser.rows.length > 0) {
+    const existingUser = await AuthService.prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
       throw new Error('User with this email already exists');
     }
 
@@ -70,14 +79,16 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(password, this.SALT_ROUNDS);
 
     // Insert new user
-    const result = await pool.query(
-      `INSERT INTO users_whatsapp (name, email, password_hash, role) 
-       VALUES ($1, $2, $3, $4) 
-       RETURNING id, name, email, role, is_approved, is_active, created_at`,
-      [name, email, passwordHash, 'user']
-    );
-
-    return result.rows[0];
+    const created = await AuthService.prisma.user.create({
+      data: {
+        name,
+        email,
+        password_hash: passwordHash,
+        role: 'user' as any,
+      },
+      select: { id: true, name: true, email: true, role: true, is_approved: true, is_active: true, created_at: true }
+    });
+    return created as any;
   }
 
   /**
@@ -86,12 +97,8 @@ export class AuthService {
   static async createAggregator(userData: CreateAggregatorData): Promise<Omit<User, 'password_hash'>> {
     const { name, email, mobile_no, gst_required = false, gst_number, aggregator_name, aggregator_address } = userData;
 
-    const existingUser = await pool.query(
-      'SELECT id FROM users_whatsapp WHERE email = $1',
-      [email]
-    );
-
-    if (existingUser.rows.length > 0) {
+    const existingUser = await AuthService.prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
       throw new Error('User with this email already exists');
     }
 
@@ -103,12 +110,25 @@ export class AuthService {
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    const result = await pool.query(
-      `INSERT INTO users_whatsapp (name, email, password_hash, role, is_approved, is_active, mobile_no, gst_required, gst_number, aggregator_name, aggregator_address, verification_token, verification_expires_at, must_change_password)
-       VALUES ($1, $2, $3, $4, FALSE, FALSE, $5, $6, $7, $8, $9, $10, $11, TRUE)
-       RETURNING id, name, email, role, is_approved, is_active, created_at, mobile_no, gst_required, gst_number, aggregator_name, aggregator_address, verification_token, verification_expires_at`,
-      [name, email, passwordHash, 'aggregator', mobile_no, gst_required, gst_number, aggregator_name || null, aggregator_address || null, verificationToken, verificationExpiresAt]
-    );
+    const created = await AuthService.prisma.user.create({
+      data: {
+        name,
+        email,
+        password_hash: passwordHash,
+        role: 'aggregator' as any,
+        is_approved: false,
+        is_active: false,
+        mobile_no: mobile_no || null,
+        gst_required,
+        gst_number: gst_number || null,
+        aggregator_name: aggregator_name || null,
+        aggregator_address: aggregator_address || null,
+        verification_token: verificationToken,
+        verification_expires_at: verificationExpiresAt as any,
+        must_change_password: true,
+      },
+      select: { id: true, name: true, email: true, role: true, is_approved: true, is_active: true, created_at: true, mobile_no: true, gst_required: true, gst_number: true, aggregator_name: true, aggregator_address: true, verification_token: true, verification_expires_at: true }
+    });
 
     // Send verification email with credentials
     try {
@@ -129,52 +149,83 @@ export class AuthService {
       console.warn('Failed to send aggregator invite email:', (e as any)?.message || e);
     }
 
-    return result.rows[0];
+    return created as any;
   }
 
   /**
    * Create a business user under an aggregator
    */
-  static async createBusinessUnderAggregator(aggregatorUserId: number, userData: RegisterUserData): Promise<Omit<User, 'password_hash'>> {
+  static async createBusinessUnderAggregator(aggregatorUserId: number, userData: CreateBusinessData): Promise<Omit<User, 'password_hash'>> {
     // Ensure aggregator exists and has correct role
-    const agg = await pool.query('SELECT id, role, is_active, is_approved FROM users_whatsapp WHERE id = $1', [aggregatorUserId]);
-    if (agg.rows.length === 0 || agg.rows[0].role !== 'aggregator') {
+    const agg = await AuthService.prisma.user.findUnique({ where: { id: aggregatorUserId }, select: { id: true, role: true, is_active: true, is_approved: true } });
+    if (!agg || agg.role !== 'aggregator') {
       throw new Error('Invalid aggregator');
     }
-    if (!agg.rows[0].is_active || !agg.rows[0].is_approved) {
+    if (!agg.is_active || !agg.is_approved) {
       throw new Error('Aggregator is not active or approved');
     }
 
-    const { name, email, password } = userData;
-    const exists = await pool.query('SELECT id FROM users_whatsapp WHERE email = $1', [email]);
-    if (exists.rows.length > 0) {
+    const { name, email, mobile_no, gst_required = false, gst_number, business_contact_name, business_contact_phone, business_address } = userData;
+    const exists = await AuthService.prisma.user.findUnique({ where: { email } });
+    if (exists) {
       throw new Error('User with this email already exists');
     }
 
-    const passwordHash = await bcrypt.hash(password, this.SALT_ROUNDS);
-    const client = await pool.connect();
+    // Generate random temporary password and verification token
+    const tempPassword = crypto.randomBytes(12).toString('base64url');
+    const passwordHash = await bcrypt.hash(tempPassword, this.SALT_ROUNDS);
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     try {
-      await client.query('BEGIN');
-      const inserted = await client.query(
-        `INSERT INTO users_whatsapp (name, email, password_hash, role, is_approved, is_active)
-         VALUES ($1, $2, $3, 'user', TRUE, TRUE)
-         RETURNING id, name, email, role, is_approved, is_active, created_at`,
-        [name, email, passwordHash]
+      const inserted = await AuthService.prisma.user.create({
+        data: {
+          name,
+          email,
+          password_hash: passwordHash,
+          role: 'user' as any,
+          is_approved: false,
+          is_active: false,
+          mobile_no: mobile_no || null,
+          gst_required,
+          gst_number: gst_number || null,
+          business_name: name,
+          business_contact_name: business_contact_name || null,
+          business_contact_phone: business_contact_phone || null,
+          business_address: business_address || null,
+          verification_token: verificationToken,
+          verification_expires_at: verificationExpiresAt as any,
+          must_change_password: true,
+        },
+        select: { id: true, name: true, email: true, role: true, is_approved: true, is_active: true, created_at: true }
+      });
+      const childId = inserted.id;
+      // Map relationship using raw query (minimal table model)
+      await AuthService.prisma.$executeRawUnsafe(
+        `INSERT INTO user_children (parent_user_id, child_user_id) VALUES ($1, $2) ON CONFLICT (parent_user_id, child_user_id) DO NOTHING`,
+        aggregatorUserId,
+        childId,
       );
-      const childId = inserted.rows[0].id;
-      // Map relationship
-      await client.query(
-        `INSERT INTO user_children (parent_user_id, child_user_id) VALUES ($1, $2)
-         ON CONFLICT (parent_user_id, child_user_id) DO NOTHING`,
-        [aggregatorUserId, childId]
-      );
-      await client.query('COMMIT');
-      return inserted.rows[0];
+
+      // Send verification email with credentials
+      try {
+        const feBase = env.FRONTEND_BASE_URL;
+        const beBase = env.API_BASE_URL || env.SERVER_URL || '';
+        const verifyUrl = feBase && feBase.length
+          ? `${feBase.replace(/\/$/, '')}/verify?token=${verificationToken}`
+          : `${beBase.replace(/\/$/, '')}/api/auth/verify?token=${verificationToken}`;
+        await sendBusinessInviteEmail({
+          to: email,
+          tempPassword: tempPassword,
+          verifyUrl,
+          username: email,
+          businessName: name,
+        });
+      } catch (e) {
+        console.warn('Failed to send business invite email:', (e as any)?.message || e);
+      }
+      return inserted as any;
     } catch (e) {
-      await client.query('ROLLBACK');
       throw e;
-    } finally {
-      client.release();
     }
   }
 
@@ -312,45 +363,39 @@ export class AuthService {
   }
 
   static async verifyEmailByToken(token: string): Promise<{ id: number; email: string }> {
-    const res = await pool.query(
-      `SELECT id, email, verification_expires_at FROM users_whatsapp WHERE verification_token = $1 LIMIT 1`,
-      [token]
-    );
-    if (res.rows.length === 0) {
+    const res = await AuthService.prisma.user.findFirst({ where: { verification_token: token }, select: { id: true, email: true, verification_expires_at: true } });
+    if (!res) {
       throw new Error('Invalid verification token');
     }
-    const row = res.rows[0];
+    const row = res;
     if (row.verification_expires_at && new Date(row.verification_expires_at).getTime() < Date.now()) {
       throw new Error('Verification token has expired');
     }
-    await pool.query(
-      `UPDATE users_whatsapp 
-       SET is_active = TRUE, is_approved = TRUE, email_verified_at = CURRENT_TIMESTAMP, verification_token = NULL, verification_expires_at = NULL
-       WHERE id = $1`,
-      [row.id]
-    );
+    await AuthService.prisma.user.update({
+      where: { id: row.id },
+      data: {
+        is_active: true,
+        is_approved: true,
+        email_verified_at: new Date(),
+        verification_token: null,
+        verification_expires_at: null,
+      }
+    });
     return { id: row.id, email: row.email };
   }
 
   static async resendVerification(email: string): Promise<void> {
-    const userRes = await pool.query(
-      `SELECT id, email, email_verified_at FROM users_whatsapp WHERE email = $1 LIMIT 1`,
-      [email]
-    );
-    if (userRes.rows.length === 0) {
+    const user = await AuthService.prisma.user.findUnique({ where: { email }, select: { id: true, email: true, email_verified_at: true } });
+    if (!user) {
       // Do not leak existence
       return;
     }
-    const user = userRes.rows[0];
     if (user.email_verified_at) {
       return; // Already verified
     }
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await pool.query(
-      `UPDATE users_whatsapp SET verification_token = $1, verification_expires_at = $2 WHERE id = $3`,
-      [token, expires, user.id]
-    );
+    await AuthService.prisma.user.update({ where: { id: user.id }, data: { verification_token: token, verification_expires_at: expires } });
     const feBase = env.FRONTEND_BASE_URL;
     const beBase = env.API_BASE_URL || env.SERVER_URL || '';
     const verifyUrl = feBase && feBase.length

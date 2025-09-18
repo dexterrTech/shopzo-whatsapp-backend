@@ -14,6 +14,14 @@ export interface AggregatorInviteEmail {
   aggregatorName?: string;
 }
 
+export interface BusinessInviteEmail {
+  to: string;
+  tempPassword: string;
+  verifyUrl: string;
+  username: string;
+  businessName?: string;
+}
+
 function baseTemplate(content: string, title = "Notification") {
   return `
   <div style="max-width:600px;margin:0 auto;padding:20px;
@@ -124,6 +132,57 @@ export async function sendVerificationLink(to: string, verifyUrl: string): Promi
       from,
       subject: 'Verify Your Email Address',
       html: baseTemplate(content, "Email Verification"),
+    });
+    return;
+  }
+  console.warn('No SMTP or SENDGRID configured; skipping email send.');
+}
+
+export async function sendBusinessInviteEmail(params: BusinessInviteEmail): Promise<void> {
+  const from = env.EMAIL_FROM || 'no-reply@yourdomain.com';
+
+  const content = `
+    <p>Hi${params.businessName ? ' ' + params.businessName : ''},</p>
+    <p>Your business account has been created by your aggregator.
+       Please verify your email and log in using the credentials below:</p>
+    <p style="background:#f3f4f6;padding:12px;border-radius:6px">
+      <b>Username:</b> ${params.username}<br/>
+      <b>Temporary password:</b> ${params.tempPassword}
+    </p>
+    <p style="text-align:center">
+      <a href="${params.verifyUrl}" 
+         style="display:inline-block;padding:12px 20px;
+                background:#0d6efd;color:#fff;font-weight:bold;
+                text-decoration:none;border-radius:6px">
+        Verify My Email
+      </a>
+    </p>
+    <p>If the button above doesn’t work, copy this link into your browser:</p>
+    <p><a href="${params.verifyUrl}" style="color:#0d6efd">${params.verifyUrl}</a></p>
+    <p>If you didn’t request this, you can safely ignore this email.</p>
+  `;
+
+  if (env.SMTP_HOST) {
+    const transporter = nodemailer.createTransport({
+      host: env.SMTP_HOST,
+      port: env.SMTP_PORT || 587,
+      secure: Boolean(env.SMTP_SECURE),
+      auth: env.SMTP_USER && env.SMTP_PASS ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
+    } as any);
+    await transporter.sendMail({
+      to: params.to,
+      from,
+      subject: 'Your Business Account – Verify Email',
+      html: baseTemplate(content, 'Welcome to Our Platform'),
+    });
+    return;
+  }
+  if (env.SENDGRID_API_KEY) {
+    await sgMail.send({
+      to: params.to,
+      from,
+      subject: 'Your Business Account – Verify Email',
+      html: baseTemplate(content, 'Welcome to Our Platform'),
     });
     return;
   }

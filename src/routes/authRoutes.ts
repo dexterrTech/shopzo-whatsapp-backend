@@ -22,9 +22,14 @@ const updateRoleSchema = z.object({
 });
 
 const createUserSchema = z.object({
-  name: z.string().min(2),
+  name: z.string().min(2), // business name
   email: z.string().email(),
-  password: z.string().min(6)
+  mobile_no: z.string().optional(),
+  gst_required: z.boolean().optional(),
+  gst_number: z.string().optional(),
+  business_contact_name: z.string().optional(),
+  business_contact_phone: z.string().optional(),
+  business_address: z.string().optional(),
 });
 
 const createAggregatorSchema = z.object({
@@ -42,10 +47,15 @@ const setPasswordSchema = z.object({
 });
 
 const adminCreateBusinessSchema = z.object({
-  name: z.string().min(2),
+  name: z.string().min(2), // business name
   email: z.string().email(),
-  password: z.string().min(6),
-  aggregator_user_id: z.number().int().positive()
+  aggregator_user_id: z.number().int().positive(),
+  mobile_no: z.string().optional(),
+  gst_required: z.boolean().optional(),
+  gst_number: z.string().optional(),
+  business_contact_name: z.string().optional(),
+  business_contact_phone: z.string().optional(),
+  business_address: z.string().optional(),
 });
 
 /**
@@ -532,7 +542,12 @@ router.post('/admin/create-business', authenticateToken, requireSuperAdmin, asyn
     const user = await AuthService.createBusinessUnderAggregator(validated.aggregator_user_id, {
       name: validated.name,
       email: validated.email,
-      password: validated.password
+      mobile_no: validated.mobile_no,
+      gst_required: validated.gst_required,
+      gst_number: validated.gst_number,
+      business_contact_name: validated.business_contact_name,
+      business_contact_phone: validated.business_contact_phone,
+      business_address: validated.business_address,
     });
     res.status(201).json({ success: true, message: 'Business created', data: user });
   } catch (error) {

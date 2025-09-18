@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DB_CONNECTION_STRING")
+}
+
+enum Role {
+  user
+  aggregator
+  super_admin
+}
+
+model User {
+  id                       Int       @id @default(autoincrement())
+  name                     String
+  email                    String    @unique
+  password_hash            String
+  role                     String    @default("user")
+  is_approved              Boolean   @default(false)
+  is_active                Boolean   @default(true)
+  created_at               DateTime  @default(now())
+  updated_at               DateTime? @db.Timestamp(6)
+  last_login_at            DateTime?
+  approved_by              Int?
+  approved_at              DateTime?
+
+  // Aggregator/business extra fields
+  mobile_no                String?
+  gst_required             Boolean?  @default(false)
+  gst_number               String?
+  aggregator_name          String?
+  aggregator_address       String?
+  business_name            String?
+  business_contact_name    String?
+  business_contact_phone   String?
+  business_address         String?
+
+  verification_token       String?
+  verification_expires_at  DateTime?
+  email_verified_at        DateTime?
+  must_change_password     Boolean?  @default(true)
+
+  @@map("users_whatsapp")
+}
+
+model UserChildren {
+  parent_user_id Int
+  child_user_id  Int
+
+  @@id([parent_user_id, child_user_id])
+  @@map("user_children")
+}
+
+
