@@ -495,6 +495,13 @@ router.post("/", authenticateToken, async (req, res) => {
         text: z.string().optional(),
         format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT"]).optional(),
         example: z.any().optional(),
+        buttons: z.array(z.object({
+          type: z.enum(["URL", "PHONE", "PHONE_NUMBER"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
+          text: z.string(),
+          url: z.string().optional(),
+          phone_number: z.string().optional(),
+          example: z.string().optional()
+        })).optional(),
       })).min(1),
       auto_category: z.boolean().default(false),
     });
@@ -592,7 +599,35 @@ router.post("/", authenticateToken, async (req, res) => {
           return { type: 'FOOTER', text: comp.text || '' };
         }
         if (comp.type === 'BUTTONS') {
-          return { type: 'BUTTONS', buttons: comp.buttons || comp.example || [] };
+          // Handle the new button structure with proper validation
+          const buttons = comp.buttons || comp.example || [];
+          const processedButtons = buttons.map((btn: any) => {
+            if (btn.type === 'URL') {
+              const urlButton: any = {
+                type: 'URL',
+                text: btn.text || ''
+              };
+              
+              if (btn.url) {
+                urlButton.url = btn.url;
+              }
+              
+              if (btn.example) {
+                urlButton.example = btn.example;
+              }
+              
+              return urlButton;
+            } else if (btn.type === 'PHONE' || btn.type === 'PHONE_NUMBER') {
+              return {
+                type: 'PHONE_NUMBER',
+                text: btn.text || '',
+                phone_number: btn.phone_number || btn.phoneNumber || ''
+              };
+            }
+            return btn;
+          });
+          
+          return { type: 'BUTTONS', buttons: processedButtons };
         }
         return comp;
       }
@@ -908,7 +943,13 @@ router.put("/:id", authenticateToken, async (req, res) => {
         text: z.string().optional(),
         format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT"]).optional(),
         example: z.any().optional(),
-        buttons: z.array(z.any()).optional(),
+        buttons: z.array(z.object({
+          type: z.enum(["URL", "PHONE", "PHONE_NUMBER"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
+          text: z.string(),
+          url: z.string().optional(),
+          phone_number: z.string().optional(),
+          example: z.string().optional()
+        })).optional(),
       })).optional(),
     });
 

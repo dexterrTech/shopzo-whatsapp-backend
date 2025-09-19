@@ -2,10 +2,12 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticateToken } from "../middleware/authMiddleware";
 import { pool } from "../config/database";
+import { PrismaClient } from "@prisma/client";
 import { upsertBillingLog, holdWalletInSuspenseForBilling } from "../services/billingService";
 import { env } from "../config/env";
 
 const router = Router();
+const prisma = new PrismaClient();
 
 // Types for campaign and message tracking
 export interface Campaign {
@@ -367,8 +369,8 @@ router.post("/send", authenticateToken, async (req, res) => {
          });
        }
 
-      // Verify campaign exists and belongs to user
-      const campaignResult = await client.query(
+      // Verify campaign exists and belongs to user (keep SQL here for now if no Prisma model)
+      const campaignResult = await pool.query(
         'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
         [body.campaignId, userId]
       );
@@ -954,6 +956,190 @@ router.post("/send", authenticateToken, async (req, res) => {
       message: 'Internal server error while sending template messages',
       error: error.message
     });
+  }
+});
+
+/**
+ * @swagger
+ * /api/send-template/cta:
+ *   post:
+ *     tags:
+ *       - Send Template
+ *     summary: Send a single template message with CTA button parameters
+ *     description: Sends a template message using Interakt with a CTA button (URL sub_type) and optional body/header components
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - to
+ *               - templateName
+ *               - languageCode
+ *             properties:
+ *               to:
+ *                 type: string
+ *                 description: Recipient phone in international format, e.g. +919999999999 or 919999999999
+ *               templateName:
+ *                 type: string
+ *               languageCode:
+ *                 type: string
+ *                 description: Language code, e.g. en, en_US (will be coerced to en)
+ *               cta:
+ *                 type: object
+ *                 description: CTA button config (URL type)
+ *                 properties:
+ *                   index:
+ *                     type: integer
+ *                     description: Button index as per template (0-based)
+ *                   sub_type:
+ *                     type: string
+ *                     enum: [url]
+ *                   payload:
+ *                     type: string
+ *                     description: The dynamic part for URL button
+ *               components:
+ *                 type: array
+ *                 description: Optional raw Interakt components to fully control payload
+ *     responses:
+ *       200:
+ *         description: Message sent (accepted)
+ *       400:
+ *         description: Bad request
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+// POST /api/send-template/cta - Send one template with CTA button
+router.post("/cta", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Authentication required" });
+    }
+
+    const bodySchema = z.object({
+      to: z.string().min(5),
+      templateName: z.string().min(1),
+      languageCode: z.string().min(2),
+      cta: z
+        .object({
+          index: z.coerce.number().int().min(0).default(0),
+          sub_type: z.literal("url").default("url"),
+          payload: z.string().min(1),
+        })
+        .optional(),
+      components: z.array(z.any()).optional(),
+    });
+
+    const body = bodySchema.parse(req.body);
+
+    // Get user's WhatsApp setup via ORM
+    try {
+      const setup = await (prisma as any).whatsappSetup.findFirst({
+        where: {
+          user_id: Number(userId),
+          waba_id: { not: null },
+          phone_number_id: { not: null }
+        },
+        orderBy: { id: "desc" }
+      });
+      if (!setup) {
+        return res.status(400).json({
+          success: false,
+          message: "WhatsApp setup not completed. Please complete WhatsApp Business setup with both WABA ID and Phone Number ID.",
+          code: "WHATSAPP_SETUP_REQUIRED",
+        });
+      }
+
+      const wabaId = String(setup.waba_id);
+      const phoneNumberId = String(setup.phone_number_id);
+      const accessToken = env.INTERAKT_ACCESS_TOKEN;
+      if (!accessToken) {
+        return res.status(500).json({ success: false, message: "Interakt access token not configured" });
+      }
+
+      // Ensure phone number is in +<country><number> format
+      let to = body.to.trim();
+      if (!to.startsWith("+")) {
+        if (to.startsWith("91")) to = "+" + to; else to = "+91" + to; // heuristic
+      }
+
+      const messagePayload: any = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "template",
+        template: {
+          name: body.templateName,
+          language: { code: body.languageCode.split("_")[0] },
+        },
+      };
+
+      if (Array.isArray(body.components) && body.components.length > 0) {
+        messagePayload.template.components = body.components;
+      } else if (body.cta) {
+        messagePayload.template.components = [
+          {
+            type: "button",
+            sub_type: "url",
+            index: String(body.cta.index ?? 0),
+            parameters: [
+              {
+                type: "payload",
+                payload: body.cta.payload,
+              },
+            ],
+          },
+        ];
+      }
+
+      console.log("Send CTA - Request:", {
+        url: `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
+        wabaId,
+        phoneNumberId,
+        payload: messagePayload,
+      });
+
+      const interaktResp = await fetch(
+        `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            "x-access-token": accessToken,
+            "x-waba-id": wabaId,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(messagePayload),
+        }
+      );
+
+      const text = await interaktResp.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+      if (!interaktResp.ok) {
+        return res.status(interaktResp.status).json({
+          success: false,
+          message: `Interakt API error: ${interaktResp.status} ${interaktResp.statusText}`,
+          details: data,
+        });
+      }
+
+      return res.json({ success: true, data });
+    } finally {
+      // prisma is shared; no disconnect here
+    }
+  } catch (error: any) {
+    console.error("Error sending CTA template:", error);
+    if (error.name === "ZodError") {
+      return res.status(400).json({ success: false, message: "Invalid request data", errors: error.errors });
+    }
+    return res.status(500).json({ success: false, message: "Internal server error", error: error.message });
   }
 });
 

@@ -55,3 +55,15 @@ model UserChildren {
 }
 
 
+// Minimal model used by server to read WABA/Phone Number IDs via ORM
+model WhatsappSetup {
+  id              Int       @id @default(autoincrement())
+  user_id         Int
+  waba_id         String?
+  phone_number_id String?
+  created_at      DateTime? @default(now())
+
+  @@map("whatsapp_setups")
+}
+
+
