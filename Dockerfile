@@ -24,6 +24,9 @@ RUN npm run build
 # Stage 2: Production stage
 FROM node:18-alpine AS production
 
+# Install OpenSSL and other required packages
+RUN apk add --no-cache openssl
+
 # Set working directory
 WORKDIR /app
 

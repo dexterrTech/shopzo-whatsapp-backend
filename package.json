@@ -13,7 +13,8 @@
     "migrate": "ts-node src/config/migrations.ts",
     "seed": "ts-node src/config/seed.ts",
     "prisma:generate": "prisma generate",
-    "prisma:db:push": "prisma db push"
+    "prisma:db:push": "prisma db push",
+    "postinstall": "prisma generate"
   },
   "keywords": [],
   "author": "",
