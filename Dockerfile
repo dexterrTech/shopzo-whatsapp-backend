@@ -37,8 +37,8 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Copy environment file (if it exists)
-COPY .env* ./
+# Copy environment example file
+COPY .env.example ./
 
 # Set default environment variables as fallback
 ENV NODE_ENV=production
