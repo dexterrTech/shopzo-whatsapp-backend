@@ -18,11 +18,6 @@ if (process.env.NODE_ENV !== 'production') {
   globalThis.__prisma = prisma;
 }
 
-// Handle Prisma connection errors
-prisma.$on('error', (e) => {
-  console.error('Prisma error:', e);
-});
-
 // Graceful shutdown
 process.on('beforeExit', async () => {
   await prisma.$disconnect();
