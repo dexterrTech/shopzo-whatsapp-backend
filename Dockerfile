@@ -37,8 +37,13 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Copy environment example file
-COPY .env.example ./
+# Copy environment file (if it exists)
+COPY .env* ./
+
+# Set default environment variables as fallback
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV USE_FALLBACK_WHEN_ERROR=true
 
 # Change ownership to nodejs user
 RUN chown -R nodejs:nodejs /app

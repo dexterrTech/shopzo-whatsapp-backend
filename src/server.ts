@@ -460,14 +460,14 @@ const dbConnectionVars = [
 ];
 
 // Log server configuration
-dlog('🌐 Server Configuration:');
-dlog(`   Environment: ${env.NODE_ENV}`);
-dlog(`   Process NODE_ENV: ${process.env.NODE_ENV}`);
-dlog(`   Port: ${env.PORT} (numericPort: ${numericPort})`);
-dlog(`   Server URL: ${env.SERVER_URL || 'Not set (using localhost)'}`);
-dlog(`   Swagger will show: ${env.SERVER_URL ? `${env.SERVER_URL} and localhost:${env.PORT}` : `localhost:${env.PORT} only`}`);
-dlog(`   Running from: ${__dirname}`);
-dlog(`   Swagger will scan both .ts and .js files for compatibility`);
+console.log('🌐 Server Configuration:');
+console.log(`   Environment: ${env.NODE_ENV}`);
+console.log(`   Process NODE_ENV: ${process.env.NODE_ENV}`);
+console.log(`   Port: ${env.PORT} (numericPort: ${numericPort})`);
+console.log(`   Server URL: ${env.SERVER_URL || 'Not set (using localhost)'}`);
+console.log(`   Database Host: ${env.DB_HOST}`);
+console.log(`   Database Name: ${env.DB_NAME}`);
+console.log(`   Running from: ${__dirname}`);
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 const missingDbVars = dbConnectionVars.filter(varName => !process.env[varName]);
@@ -497,18 +497,20 @@ app.use(errorHandler);
 
 // Initialize server first for platform health checks, then initialize database in background
 async function startServer() {
+  console.log('🚀 Starting server...');
+  
   const server = app.listen(numericPort, '0.0.0.0', () => {
-    // eslint-disable-next-line no-console
-    console.log(`Server listening on http://0.0.0.0:${numericPort}`);
-    dlog(`Swagger docs available at http://localhost:${numericPort}/docs and /api/docs`);
+    console.log(`✅ Server listening on http://0.0.0.0:${numericPort}`);
+    console.log(`📚 Swagger docs available at http://localhost:${numericPort}/docs and /api/docs`);
+    console.log(`🏥 Health check available at http://localhost:${numericPort}/health`);
   });
 
   // Handle server errors
   server.on('error', (error: any) => {
     if (error.code === 'EADDRINUSE') {
-      console.error(`Port ${numericPort} is already in use`);
+      console.error(`❌ Port ${numericPort} is already in use`);
     } else {
-      console.error('Server error:', error);
+      console.error('❌ Server error:', error);
     }
     process.exit(1);
   });
@@ -516,10 +518,11 @@ async function startServer() {
   // Initialize database in background (non-blocking)
   setImmediate(async () => {
     try {
+      console.log('🔌 Initializing database connection...');
       await initDatabase();
-      console.log("Database initialized successfully");
+      console.log("✅ Database initialized successfully");
     } catch (error) {
-      console.error('Database initialization failed (continuing with fallback):', error);
+      console.error('⚠️  Database initialization failed (continuing with fallback):', error);
     }
   });
 }
