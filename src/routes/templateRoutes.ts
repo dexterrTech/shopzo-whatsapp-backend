@@ -369,16 +369,15 @@ router.get("/:id", authenticateToken, async (req, res) => {
 
 // Helper function to sanitize template name for Interakt API
 function sanitizeTemplateName(name: string): string {
-  // Lowercase
-  let out = (name || '').toLowerCase();
-  // Replace whitespace with underscore
+  let out = (name || '');
+  // Replace spaces with underscores
   out = out.replace(/\s+/g, '_');
-  // Remove all characters except [a-z0-9_]
-  out = out.replace(/[^a-z0-9_]/g, '_');
-  // Collapse multiple underscores
+  // Replace all special characters (except letters, numbers, and underscores) with underscores
+  out = out.replace(/[^a-zA-Z0-9_]/g, '_');
+  // Collapse multiple underscores into single underscore
   out = out.replace(/_+/g, '_');
-  // Trim leading/trailing underscores
-  out = out.replace(/^_+|_+$/g, '');
+  // Only remove leading underscores, keep trailing ones
+  out = out.replace(/^_+/g, '');
   return out;
 }
 
@@ -491,16 +490,31 @@ router.post("/", authenticateToken, async (req, res) => {
       language: z.string().min(2).max(5),
       category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION"]),
       components: z.array(z.object({
-        type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS"]),
+        type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS", "CAROUSEL"]),
         text: z.string().optional(),
-        format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT"]).optional(),
+        format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]).optional(),
         example: z.any().optional(),
         buttons: z.array(z.object({
-          type: z.enum(["URL", "PHONE", "PHONE_NUMBER"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
+          type: z.enum(["URL", "PHONE", "PHONE_NUMBER", "QUICK_REPLY"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
           text: z.string(),
           url: z.string().optional(),
           phone_number: z.string().optional(),
           example: z.string().optional()
+        })).optional(),
+        cards: z.array(z.object({
+          components: z.array(z.object({
+            type: z.enum(["HEADER", "BODY", "BUTTONS"]),
+            text: z.string().optional(),
+            format: z.enum(["IMAGE", "VIDEO"]).optional(),
+            example: z.any().optional(),
+            buttons: z.array(z.object({
+              type: z.enum(["URL", "PHONE", "PHONE_NUMBER", "QUICK_REPLY"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
+              text: z.string(),
+              url: z.string().optional(),
+              phone_number: z.string().optional(),
+              example: z.string().optional()
+            })).optional(),
+          }))
         })).optional(),
       })).min(1),
       auto_category: z.boolean().default(false),
@@ -536,13 +550,13 @@ router.post("/", authenticateToken, async (req, res) => {
       // Sanitize the template name for Interakt API
       const sanitizedName = sanitizeTemplateName(body.name);
       console.log('Original name:', body.name, 'Sanitized name:', sanitizedName);
-      // Validate sanitized name meets Meta constraints: lowercase letters, numbers, underscores; start with a letter
-      const nameIsValid = /^[a-z][a-z0-9_]*$/.test(sanitizedName);
+      // Validate sanitized name meets Meta constraints: letters, numbers, underscores; start with a letter
+      const nameIsValid = /^[a-zA-Z][a-zA-Z0-9_]*$/.test(sanitizedName);
       if (!sanitizedName || !nameIsValid) {
         return res.status(400).json({
           error: true,
           code: 'INVALID_TEMPLATE_NAME',
-          message: 'Template name must start with a letter and contain only lowercase letters, numbers, and underscores.',
+          message: 'Template name must start with a letter and contain only letters, numbers, and underscores.',
           details: { provided: body.name, sanitized: sanitizedName }
         });
       }
@@ -568,6 +582,9 @@ router.post("/", authenticateToken, async (req, res) => {
               vals = Array.from({ length: n }, (_, i) => `Example ${i + 1}`);
             }
             out.example = { body_text: [vals] };
+          } else {
+            // Even if no placeholders, we need to provide an example
+            out.example = { body_text: [["Example"]] };
           }
           return out;
         }
@@ -623,11 +640,87 @@ router.post("/", authenticateToken, async (req, res) => {
                 text: btn.text || '',
                 phone_number: btn.phone_number || btn.phoneNumber || ''
               };
+            } else if (btn.type === 'QUICK_REPLY') {
+              return {
+                type: 'QUICK_REPLY',
+                text: btn.text || ''
+              };
             }
             return btn;
           });
           
           return { type: 'BUTTONS', buttons: processedButtons };
+        }
+        if (comp.type === 'CAROUSEL') {
+          // Handle carousel components
+          const cards = comp.cards || [];
+          const processedCards = cards.map((card: any) => {
+            const cardComponents = card.components || [];
+            return {
+              components: cardComponents.map((cardComp: any) => {
+                if (cardComp.type === 'BODY') {
+                  const n = countPlaceholders(cardComp.text);
+                  const out: any = { type: 'BODY', text: cardComp.text || '' };
+                  if (n > 0) {
+                    let vals: string[] | undefined;
+                    if (cardComp.example?.body_text && Array.isArray(cardComp.example.body_text[0])) {
+                      vals = (cardComp.example.body_text[0] as any[]).map(String);
+                    }
+                    if (!vals || vals.length !== n) {
+                      vals = Array.from({ length: n }, (_, i) => `Example ${i + 1}`);
+                    }
+                    out.example = { body_text: [vals] };
+                  }
+                  return out;
+                }
+                if (cardComp.type === 'HEADER') {
+                  return {
+                    type: 'HEADER',
+                    format: cardComp.format || 'IMAGE',
+                    example: cardComp.example
+                  };
+                }
+                if (cardComp.type === 'BUTTONS') {
+                  const buttons = cardComp.buttons || [];
+                  const processedButtons = buttons.map((btn: any) => {
+                    if (btn.type === 'URL') {
+                      const urlButton: any = {
+                        type: 'URL',
+                        text: btn.text || ''
+                      };
+                      
+                      if (btn.url) {
+                        urlButton.url = btn.url;
+                      }
+                      
+                      if (btn.example) {
+                        urlButton.example = btn.example;
+                      }
+                      
+                      return urlButton;
+                    } else if (btn.type === 'PHONE' || btn.type === 'PHONE_NUMBER') {
+                      return {
+                        type: 'PHONE_NUMBER',
+                        text: btn.text || '',
+                        phone_number: btn.phone_number || btn.phoneNumber || ''
+                      };
+                    } else if (btn.type === 'QUICK_REPLY') {
+                      return {
+                        type: 'QUICK_REPLY',
+                        text: btn.text || ''
+                      };
+                    }
+                    return btn;
+                  });
+                  
+                  return { type: 'BUTTONS', buttons: processedButtons };
+                }
+                return cardComp;
+              })
+            };
+          });
+          
+          return { type: 'CAROUSEL', cards: processedCards };
         }
         return comp;
       }
@@ -941,7 +1034,7 @@ router.put("/:id", authenticateToken, async (req, res) => {
       components: z.array(z.object({
         type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS"]),
         text: z.string().optional(),
-        format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT"]).optional(),
+        format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]).optional(),
         example: z.any().optional(),
         buttons: z.array(z.object({
           type: z.enum(["URL", "PHONE", "PHONE_NUMBER"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
