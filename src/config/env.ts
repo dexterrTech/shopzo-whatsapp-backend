@@ -13,6 +13,8 @@ const EnvSchema = z.object({
   INTERAKT_ACCESS_TOKEN: z.string().default("dev_access_token"),
   INTERAKT_PHONE_NUMBER_ID: z.string().default("dev_phone_number_id"),
   INTERAKT_SOLUTION_ID: z.string().default("1101161528613698"),
+  INTERAKT_APP_ID: z.string().optional(),
+  FACEBOOK_USER_ACCESS_TOKEN: z.string().optional(),
 
   // API Base URLs
   FACEBOOK_GRAPH_API_BASE_URL: z.string().default("https://graph.facebook.com"),
@@ -49,7 +51,7 @@ const EnvSchema = z.object({
   
   // API Versions
   FACEBOOK_API_VERSION: z.string().default("v18.0"),
-  INTERAKT_API_VERSION: z.string().default("v1"),
+  INTERAKT_API_VERSION: z.string().default("v17.0"),
   
   // JWT Configuration
   JWT_SECRET: z.string().default("change-me-dev-secret"),
@@ -78,6 +80,6 @@ const EnvSchema = z.object({
 const parsed = EnvSchema.safeParse(process.env);
 
 export const env = parsed.success ? parsed.data : EnvSchema.parse({});
-export const numericPort = Number(process.env.PORT || env.PORT) || 8080;
+export const numericPort = parseInt(process.env.PORT || env.PORT, 10) || 8080;
 
 

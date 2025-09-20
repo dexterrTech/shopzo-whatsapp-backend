@@ -450,6 +450,15 @@ const requiredEnvVars = [
   'WEBHOOK_VERIFY_TOKEN'
 ];
 
+// Check for critical database connection
+const dbConnectionVars = [
+  'DB_CONNECTION_STRING',
+  'DB_HOST',
+  'DB_NAME',
+  'DB_USER',
+  'DB_PASSWORD'
+];
+
 // Log server configuration
 dlog('🌐 Server Configuration:');
 dlog(`   Environment: ${env.NODE_ENV}`);
@@ -461,9 +470,16 @@ dlog(`   Running from: ${__dirname}`);
 dlog(`   Swagger will scan both .ts and .js files for compatibility`);
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+const missingDbVars = dbConnectionVars.filter(varName => !process.env[varName]);
+
 if (missingEnvVars.length > 0) {
   console.warn("⚠️  Missing environment variables:", missingEnvVars);
   console.warn("Some features may not work properly in development mode");
+}
+
+if (missingDbVars.length > 0) {
+  console.error("❌ Missing critical database environment variables:", missingDbVars);
+  console.error("Database connection will likely fail!");
 }
 
 // Swagger docs (root and under /api for proxies that only forward /api/*)
@@ -481,18 +497,31 @@ app.use(errorHandler);
 
 // Initialize server first for platform health checks, then initialize database in background
 async function startServer() {
-  app.listen(numericPort, '0.0.0.0', () => {
+  const server = app.listen(numericPort, '0.0.0.0', () => {
     // eslint-disable-next-line no-console
-    console.log(`Server listening on http://localhost:${numericPort}`);
+    console.log(`Server listening on http://0.0.0.0:${numericPort}`);
     dlog(`Swagger docs available at http://localhost:${numericPort}/docs and /api/docs`);
   });
 
-  try {
-    await initDatabase();
-    console.log("Database initialized successfully");
-  } catch (error) {
-    console.error('Database initialization failed (continuing with fallback):', error);
-  }
+  // Handle server errors
+  server.on('error', (error: any) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Port ${numericPort} is already in use`);
+    } else {
+      console.error('Server error:', error);
+    }
+    process.exit(1);
+  });
+
+  // Initialize database in background (non-blocking)
+  setImmediate(async () => {
+    try {
+      await initDatabase();
+      console.log("Database initialized successfully");
+    } catch (error) {
+      console.error('Database initialization failed (continuing with fallback):', error);
+    }
+  });
 }
 
 startServer();

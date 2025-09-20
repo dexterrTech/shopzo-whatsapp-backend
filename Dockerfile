@@ -48,9 +48,9 @@ USER nodejs
 EXPOSE 8080
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD node -e "const http = require('http'); \
-    const options = { host: 'localhost', port: 8080, path: '/health', timeout: 2000 }; \
+    const options = { host: 'localhost', port: 8080, path: '/health', timeout: 5000 }; \
     const req = http.request(options, (res) => { \
       if (res.statusCode === 200) process.exit(0); \
       else process.exit(1); \
