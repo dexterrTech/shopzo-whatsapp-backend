@@ -2,12 +2,11 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticateToken } from "../middleware/authMiddleware";
 import { pool } from "../config/database";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../lib/prisma";
 import { upsertBillingLog, holdWalletInSuspenseForBilling } from "../services/billingService";
 import { env } from "../config/env";
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Types for campaign and message tracking
 export interface Campaign {

@@ -15,6 +15,9 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Generate Prisma client
+RUN npx prisma generate
+
 # Build the TypeScript application
 RUN npm run build
 
@@ -36,6 +39,10 @@ RUN npm ci --only=production && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
+
+# Copy Prisma schema and generate client
+COPY prisma ./prisma
+RUN npx prisma generate
 
 # Copy environment example file
 COPY .env.example ./

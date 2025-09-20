@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool } from '../config/database';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { env } from '../config/env';
 import crypto from 'crypto';
 import { sendAggregatorInviteEmail, sendVerificationLink, sendBusinessInviteEmail } from './emailService';
@@ -61,7 +61,6 @@ export interface JWTPayload {
 
 export class AuthService {
   private static readonly SALT_ROUNDS = 12;
-  private static prisma = new PrismaClient();
 
   /**
    * Register a new user
@@ -70,7 +69,7 @@ export class AuthService {
     const { name, email, password } = userData;
 
     // Check if user already exists
-    const existingUser = await AuthService.prisma.user.findUnique({ where: { email } });
+    const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       throw new Error('User with this email already exists');
     }
@@ -79,7 +78,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(password, this.SALT_ROUNDS);
 
     // Insert new user
-    const created = await AuthService.prisma.user.create({
+    const created = await prisma.user.create({
       data: {
         name,
         email,
@@ -97,7 +96,7 @@ export class AuthService {
   static async createAggregator(userData: CreateAggregatorData): Promise<Omit<User, 'password_hash'>> {
     const { name, email, mobile_no, gst_required = false, gst_number, aggregator_name, aggregator_address } = userData;
 
-    const existingUser = await AuthService.prisma.user.findUnique({ where: { email } });
+    const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       throw new Error('User with this email already exists');
     }
@@ -110,7 +109,7 @@ export class AuthService {
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    const created = await AuthService.prisma.user.create({
+    const created = await prisma.user.create({
       data: {
         name,
         email,
@@ -157,7 +156,7 @@ export class AuthService {
    */
   static async createBusinessUnderAggregator(aggregatorUserId: number, userData: CreateBusinessData): Promise<Omit<User, 'password_hash'>> {
     // Ensure aggregator exists and has correct role
-    const agg = await AuthService.prisma.user.findUnique({ where: { id: aggregatorUserId }, select: { id: true, role: true, is_active: true, is_approved: true } });
+    const agg = await prisma.user.findUnique({ where: { id: aggregatorUserId }, select: { id: true, role: true, is_active: true, is_approved: true } });
     if (!agg || agg.role !== 'aggregator') {
       throw new Error('Invalid aggregator');
     }
@@ -166,7 +165,7 @@ export class AuthService {
     }
 
     const { name, email, mobile_no, gst_required = false, gst_number, business_contact_name, business_contact_phone, business_address } = userData;
-    const exists = await AuthService.prisma.user.findUnique({ where: { email } });
+    const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) {
       throw new Error('User with this email already exists');
     }
@@ -177,7 +176,7 @@ export class AuthService {
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     try {
-      const inserted = await AuthService.prisma.user.create({
+      const inserted = await prisma.user.create({
         data: {
           name,
           email,
@@ -200,7 +199,7 @@ export class AuthService {
       });
       const childId = inserted.id;
       // Map relationship using raw query (minimal table model)
-      await AuthService.prisma.$executeRawUnsafe(
+      await prisma.$executeRawUnsafe(
         `INSERT INTO user_children (parent_user_id, child_user_id) VALUES ($1, $2) ON CONFLICT (parent_user_id, child_user_id) DO NOTHING`,
         aggregatorUserId,
         childId,
@@ -363,7 +362,7 @@ export class AuthService {
   }
 
   static async verifyEmailByToken(token: string): Promise<{ id: number; email: string }> {
-    const res = await AuthService.prisma.user.findFirst({ where: { verification_token: token }, select: { id: true, email: true, verification_expires_at: true } });
+    const res = await prisma.user.findFirst({ where: { verification_token: token }, select: { id: true, email: true, verification_expires_at: true } });
     if (!res) {
       throw new Error('Invalid verification token');
     }
@@ -371,7 +370,7 @@ export class AuthService {
     if (row.verification_expires_at && new Date(row.verification_expires_at).getTime() < Date.now()) {
       throw new Error('Verification token has expired');
     }
-    await AuthService.prisma.user.update({
+    await prisma.user.update({
       where: { id: row.id },
       data: {
         is_active: true,
@@ -385,7 +384,7 @@ export class AuthService {
   }
 
   static async resendVerification(email: string): Promise<void> {
-    const user = await AuthService.prisma.user.findUnique({ where: { email }, select: { id: true, email: true, email_verified_at: true } });
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true, email_verified_at: true } });
     if (!user) {
       // Do not leak existence
       return;
@@ -395,7 +394,7 @@ export class AuthService {
     }
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await AuthService.prisma.user.update({ where: { id: user.id }, data: { verification_token: token, verification_expires_at: expires } });
+    await prisma.user.update({ where: { id: user.id }, data: { verification_token: token, verification_expires_at: expires } });
     const feBase = env.FRONTEND_BASE_URL;
     const beBase = env.API_BASE_URL || env.SERVER_URL || '';
     const verifyUrl = feBase && feBase.length
