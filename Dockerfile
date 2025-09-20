@@ -3,6 +3,9 @@
 # Stage 1: Build stage
 FROM node:18-alpine AS builder
 
+# Install OpenSSL and other required packages for Prisma
+RUN apk add --no-cache openssl
+
 # Set working directory
 WORKDIR /app
 
