@@ -106,13 +106,19 @@ export async function seedDatabase() {
       await seedBillingLogs();
     } else {
       console.log('Billing logs already exist, checking if user 2 has logs...');
-      // Check if user ID 2 has any billing logs
-      const user2Logs = await pool.query('SELECT COUNT(*) FROM billing_logs WHERE user_id = 2');
-      if (parseInt(user2Logs.rows[0].count) === 0) {
-        console.log('User 2 has no billing logs, creating some...');
-        await seedBillingLogsForUser2();
+      // First check if user ID 2 exists
+      const userExists = await pool.query('SELECT id FROM users_whatsapp WHERE id = 2');
+      if (userExists.rows.length === 0) {
+        console.log('User ID 2 does not exist, skipping billing logs check');
       } else {
-        console.log('User 2 already has billing logs');
+        // Check if user ID 2 has any billing logs
+        const user2Logs = await pool.query('SELECT COUNT(*) FROM billing_logs WHERE user_id = 2');
+        if (parseInt(user2Logs.rows[0].count) === 0) {
+          console.log('User 2 has no billing logs, creating some...');
+          await seedBillingLogsForUser2();
+        } else {
+          console.log('User 2 already has billing logs');
+        }
       }
     }
   } catch (error) {
@@ -139,6 +145,13 @@ export async function seedBillingLogsForUser2() {
     console.log('Seeding billing logs for user ID 2...');
     
     const userId = 2; // atharva prakashsa pawar's user ID
+    
+    // First check if user ID 2 exists
+    const userCheck = await pool.query('SELECT id FROM users_whatsapp WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      console.log(`User ID ${userId} does not exist, skipping billing logs creation`);
+      return;
+    }
     
     // Sample billing logs data for user ID 2
     const sampleLogs = [

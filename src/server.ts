@@ -27,7 +27,7 @@ import { pool } from "./config/database";
 import { WalletService } from "./services/walletService";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/spec";
-import { initDatabase } from "./config/database";
+import { initDatabase, checkDatabaseHealth } from "./config/database";
 import { authenticateToken } from "./middleware/authMiddleware";
 
 const app = express();
@@ -67,13 +67,26 @@ app.use("/files", (req, res, next) => {
   (express as any).static(path.resolve(__dirname, "..", "uploads"))
 );
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString() });
+app.get("/health", async (_req, res) => {
+  const dbHealthy = await checkDatabaseHealth();
+  res.json({ 
+    ok: true, 
+    env: env.NODE_ENV, 
+    time: new Date().toISOString(),
+    database: dbHealthy ? 'connected' : 'disconnected'
+  });
 });
 
 // Mirror health under /api for proxies that route only /api/*
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, env: env.NODE_ENV, time: new Date().toISOString(), path: "/api/health" });
+app.get("/api/health", async (_req, res) => {
+  const dbHealthy = await checkDatabaseHealth();
+  res.json({ 
+    ok: true, 
+    env: env.NODE_ENV, 
+    time: new Date().toISOString(), 
+    path: "/api/health",
+    database: dbHealthy ? 'connected' : 'disconnected'
+  });
 });
 
 // Test endpoint to check webhook data (no auth required)
@@ -523,6 +536,18 @@ async function startServer() {
       console.log("✅ Database initialized successfully");
     } catch (error) {
       console.error('⚠️  Database initialization failed (continuing with fallback):', error);
+      console.log('🔄 Will retry database connection in 30 seconds...');
+      
+      // Retry database connection after 30 seconds
+      setTimeout(async () => {
+        try {
+          console.log('🔄 Retrying database connection...');
+          await initDatabase();
+          console.log("✅ Database initialized successfully on retry");
+        } catch (retryError) {
+          console.error('❌ Database retry failed:', retryError);
+        }
+      }, 30000);
     }
   });
 }

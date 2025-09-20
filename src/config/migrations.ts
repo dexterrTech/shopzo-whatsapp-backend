@@ -4,8 +4,15 @@ export async function runMigrations() {
   try {
     console.log('Running database migrations...');
     
-    // Create users table (already in use by auth) if not exists
-    await pool.query(`
+    // Use a dedicated client for migrations to avoid connection issues
+    const client = await pool.connect();
+    
+    try {
+      // Set longer timeout for migration operations
+      await client.query('SET statement_timeout = 300000'); // 5 minutes
+      
+      // Create users table (already in use by auth) if not exists
+      await client.query(`
       CREATE TABLE IF NOT EXISTS users_whatsapp (
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -22,7 +29,7 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_users_email ON users_whatsapp(email);
       CREATE INDEX IF NOT EXISTS idx_users_role ON users_whatsapp(role);
       CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users_whatsapp(is_approved);
@@ -30,7 +37,7 @@ export async function runMigrations() {
     `);
 
     // Add new aggregator fields
-    await pool.query(`
+    await client.query(`
       ALTER TABLE users_whatsapp 
       ADD COLUMN IF NOT EXISTS mobile_no VARCHAR(20),
       ADD COLUMN IF NOT EXISTS gst_required BOOLEAN DEFAULT FALSE,
@@ -48,7 +55,7 @@ export async function runMigrations() {
     `);
 
     // Check if contacts table exists and has user_id column
-    const tableCheck = await pool.query(`
+    const tableCheck = await client.query(`
       SELECT column_name 
       FROM information_schema.columns 
       WHERE table_name = 'contacts' AND column_name = 'user_id'
@@ -59,10 +66,10 @@ export async function runMigrations() {
       console.log('Creating contacts table with user_id column...');
       
       // Drop existing table if it exists (without user_id)
-      await pool.query(`DROP TABLE IF EXISTS contacts CASCADE`);
+      await client.query(`DROP TABLE IF EXISTS contacts CASCADE`);
       
       // Create new table with user_id
-      await pool.query(`
+      await client.query(`
         CREATE TABLE contacts (
           id SERIAL PRIMARY KEY,
           user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -87,7 +94,7 @@ export async function runMigrations() {
     }
 
     // Create indexes for better performance (after ensuring user_id column exists)
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
       CREATE INDEX IF NOT EXISTS idx_contacts_whatsapp_number ON contacts(whatsapp_number);
       CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
@@ -96,7 +103,7 @@ export async function runMigrations() {
     `);
 
     // Price plans for configurable conversation pricing
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS price_plans (
         id SERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL DEFAULT 'Default',
@@ -113,12 +120,12 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_price_plans_default ON price_plans(is_default);
     `);
 
     // Create billing_logs table for tracking conversation costs
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS billing_logs (
         id SERIAL PRIMARY KEY,
         conversation_id VARCHAR(255) NOT NULL,
@@ -137,7 +144,7 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_billing_logs_user_id ON billing_logs(user_id);
       CREATE INDEX IF NOT EXISTS idx_billing_logs_category ON billing_logs(category);
       CREATE INDEX IF NOT EXISTS idx_billing_logs_start_time ON billing_logs(start_time);
@@ -147,13 +154,13 @@ export async function runMigrations() {
     `);
 
     // Safe column adds for billing logs (wallet_tx_id will be added AFTER wallet_transactions is created)
-    await pool.query(`
+    await client.query(`
       ALTER TABLE billing_logs
       ADD COLUMN IF NOT EXISTS price_plan_id INTEGER REFERENCES price_plans(id);
     `);
     
     // Wallet accounts and transactions
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS wallet_accounts (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL UNIQUE REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -165,11 +172,11 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_wallet_accounts_user_id ON wallet_accounts(user_id);
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS wallet_transactions (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -187,7 +194,7 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_wallet_tx_user_id ON wallet_transactions(user_id);
       CREATE INDEX IF NOT EXISTS idx_wallet_tx_created_at ON wallet_transactions(created_at);
       CREATE INDEX IF NOT EXISTS idx_wallet_tx_type ON wallet_transactions(type);
@@ -195,22 +202,22 @@ export async function runMigrations() {
     `);
 
     // Safe add: phone_number on wallet_transactions for linking to recipient
-    await pool.query(`
+    await client.query(`
       ALTER TABLE wallet_transactions
       ADD COLUMN IF NOT EXISTS phone_number VARCHAR(32);
     `);
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_wallet_tx_phone ON wallet_transactions(phone_number);
     `);
 
     // Now that wallet_transactions exists, safely add FK column on billing_logs
-    await pool.query(`
+    await client.query(`
       ALTER TABLE billing_logs
       ADD COLUMN IF NOT EXISTS wallet_tx_id INTEGER REFERENCES wallet_transactions(id);
     `);
 
     // User-specific price plan assignments
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_price_plans (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -220,13 +227,13 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_user_price_plans_user_id ON user_price_plans(user_id);
       CREATE INDEX IF NOT EXISTS idx_user_price_plans_effective ON user_price_plans(effective_from DESC);
     `);
 
     // WABA/phone to user mapping for webhook resolution
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS waba_sources (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -235,14 +242,14 @@ export async function runMigrations() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_waba_sources_user_id ON waba_sources(user_id);
       CREATE INDEX IF NOT EXISTS idx_waba_sources_phone ON waba_sources(phone_number_id);
       CREATE INDEX IF NOT EXISTS idx_waba_sources_waba ON waba_sources(waba_id);
     `);
 
     // Aggregator/tenant mapping - updated structure
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_relationships (
         id SERIAL PRIMARY KEY,
         parent_user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -254,14 +261,14 @@ export async function runMigrations() {
         UNIQUE(parent_user_id, child_user_id)
       );
     `);
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_user_relationships_parent ON user_relationships(parent_user_id);
       CREATE INDEX IF NOT EXISTS idx_user_relationships_child ON user_relationships(child_user_id);
       CREATE INDEX IF NOT EXISTS idx_user_relationships_type ON user_relationships(relationship_type);
     `);
 
     // Country/category overrides per plan
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS price_plan_overrides (
         id SERIAL PRIMARY KEY,
         price_plan_id INTEGER NOT NULL REFERENCES price_plans(id) ON DELETE CASCADE,
@@ -272,13 +279,13 @@ export async function runMigrations() {
         UNIQUE(price_plan_id, country_code, category)
       );
     `);
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_plan_overrides_plan ON price_plan_overrides(price_plan_id);
       CREATE INDEX IF NOT EXISTS idx_plan_overrides_country ON price_plan_overrides(country_code);
     `);
 
     // Super Admin wallet configuration
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS system_wallet (
         id SERIAL PRIMARY KEY,
         wallet_type VARCHAR(20) NOT NULL DEFAULT 'main' CHECK (wallet_type IN ('main', 'reserve')),
@@ -290,12 +297,12 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_system_wallet_type ON system_wallet(wallet_type);
     `);
 
     // Messages library: store successful outbound messages
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users_whatsapp(id) ON DELETE SET NULL,
@@ -310,16 +317,16 @@ export async function runMigrations() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_messages_to_number ON messages(to_number);
     `);
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
     `);
 
     // Add unique constraints if they don't exist
     try {
-      await pool.query(`
+      await client.query(`
         ALTER TABLE price_plans 
         ADD CONSTRAINT uq_price_plans_name UNIQUE (name);
       `);
@@ -331,16 +338,16 @@ export async function runMigrations() {
 
     // Safe column add: created_by for aggregator-owned plans
     // Safe column adds/upgrades for existing databases (suspense support)
-    await pool.query(`
+    await client.query(`
       ALTER TABLE wallet_accounts
       ADD COLUMN IF NOT EXISTS suspense_balance_paise INTEGER NOT NULL DEFAULT 0;
     `);
-    await pool.query(`
+    await client.query(`
       ALTER TABLE wallet_transactions
       ADD COLUMN IF NOT EXISTS suspense_balance_after_paise INTEGER;
     `);
     // Refresh wallet_transactions.type check to include suspense types
-    await pool.query(`
+    await client.query(`
       DO $$
       BEGIN
         BEGIN
@@ -354,13 +361,13 @@ export async function runMigrations() {
       END$$;
     `);
 
-    await pool.query(`
+    await client.query(`
       ALTER TABLE price_plans
       ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users_whatsapp(id);
     `);
 
     try {
-      await pool.query(`
+      await client.query(`
         ALTER TABLE system_wallet 
         ADD CONSTRAINT uq_system_wallet_type UNIQUE (wallet_type);
       `);
@@ -371,21 +378,21 @@ export async function runMigrations() {
     }
 
     // Insert default system wallet if not exists
-    await pool.query(`
+    await client.query(`
       INSERT INTO system_wallet (wallet_type, balance_paise) 
       VALUES ('main', 10000000) 
       ON CONFLICT (wallet_type) DO NOTHING;
     `);
 
     // Insert default price plan if not exists
-    await pool.query(`
+    await client.query(`
       INSERT INTO price_plans (name, utility_paise, marketing_paise, authentication_paise, service_paise, is_default) 
       VALUES ('Default', 100, 150, 80, 120, true) 
       ON CONFLICT (name) DO NOTHING;
     `);
 
     // Create wallet_logs table for tracking wallet transactions
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS wallet_logs (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -401,7 +408,7 @@ export async function runMigrations() {
     `);
 
     // Create WhatsApp setups table for tracking user WhatsApp Business setup
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS whatsapp_setups (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users_whatsapp(id) ON DELETE CASCADE,
@@ -423,14 +430,14 @@ export async function runMigrations() {
       );
     `);
 
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_whatsapp_setups_user_id ON whatsapp_setups(user_id);
       CREATE INDEX IF NOT EXISTS idx_whatsapp_setups_status ON whatsapp_setups(status);
       CREATE INDEX IF NOT EXISTS idx_whatsapp_setups_waba_id ON whatsapp_setups(waba_id);
     `);
 
     // Create campaigns table
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS campaigns (
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -451,7 +458,7 @@ export async function runMigrations() {
     `);
 
     // Create message_logs table
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS message_logs (
         id SERIAL PRIMARY KEY,
         campaign_id VARCHAR(255) NOT NULL,
@@ -472,7 +479,7 @@ export async function runMigrations() {
     `);
 
     // Create indexes for better performance
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_campaigns_user_id ON campaigns(user_id);
       CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
       CREATE INDEX IF NOT EXISTS idx_campaigns_created_at ON campaigns(created_at);
@@ -483,7 +490,7 @@ export async function runMigrations() {
     `);
 
     // Create webhook_logs table for comprehensive webhook data logging
-    await pool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS webhook_logs (
         id SERIAL PRIMARY KEY,
         webhook_type VARCHAR(50) NOT NULL CHECK (webhook_type IN ('verification', 'message_status', 'incoming_message', 'tech_partner', 'unknown')),
@@ -508,7 +515,7 @@ export async function runMigrations() {
     `);
 
     // Create indexes for webhook_logs
-    await pool.query(`
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_webhook_logs_type ON webhook_logs(webhook_type);
       CREATE INDEX IF NOT EXISTS idx_webhook_logs_created_at ON webhook_logs(created_at);
       CREATE INDEX IF NOT EXISTS idx_webhook_logs_user_id ON webhook_logs(user_id);
@@ -520,6 +527,9 @@ export async function runMigrations() {
     `);
 
     console.log('✅ Database migrations completed successfully');
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error('❌ Database migration failed:', error);
     throw error;
