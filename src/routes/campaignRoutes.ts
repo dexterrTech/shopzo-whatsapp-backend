@@ -233,6 +233,13 @@ router.post("/send-template", async (req, res, next) => {
       parameters: z.record(z.string(), z.string()).optional(),
       // Variable mappings to resolve per contact (when using contactIds)
       variableMapping: mappingSchema,
+      // Location parameters for location templates
+      locationParameters: z.object({
+        longitude: z.number(),
+        latitude: z.number(),
+        name: z.string(),
+        address: z.string(),
+      }).optional(),
     }).refine((b) => (b.contactIds && b.contactIds.length) || (b.phoneNumbers && b.phoneNumbers.length), {
       message: 'Provide at least one of contactIds or phoneNumbers'
     });
@@ -320,14 +327,37 @@ router.post("/send-template", async (req, res, next) => {
         }
 
         const perRecipientParams = await resolveParamsForContact(contactId);
-        const components = perRecipientParams && perRecipientParams.length > 0
-          ? [
+        const components: any[] = [];
+        
+        // Add location header if template has location header and location parameters provided
+        const hasLocationHeader = template.components?.some((comp: any) => 
+          comp.type === "HEADER" && comp.format === "LOCATION"
+        );
+        
+        if (hasLocationHeader && body.locationParameters) {
+          components.push({
+            type: "header",
+            parameters: [
               {
-                type: "body",
-                parameters: perRecipientParams.map((text) => ({ type: "text", text })),
-              },
+                type: "location",
+                location: {
+                  longitude: body.locationParameters.longitude,
+                  latitude: body.locationParameters.latitude,
+                  name: body.locationParameters.name,
+                  address: body.locationParameters.address,
+                }
+              }
             ]
-          : undefined;
+          });
+        }
+        
+        // Add body parameters if available
+        if (perRecipientParams && perRecipientParams.length > 0) {
+          components.push({
+            type: "body",
+            parameters: perRecipientParams.map((text) => ({ type: "text", text })),
+          });
+        }
 
         const payload: any = {
           messaging_product: "whatsapp",
@@ -337,7 +367,7 @@ router.post("/send-template", async (req, res, next) => {
           template: {
             name: template.name,
             language: { code: template.language || "en" },
-            ...(components ? { components } : {}),
+            ...(components.length > 0 ? { components } : {}),
           },
         };
 
