@@ -311,6 +311,37 @@ router.post("/send", authenticateToken, async (req, res) => {
         field: z.string(),
         fallback: z.string().optional().default("")
       })).optional(),
+      // Carousel template support
+      carouselCards: z.array(z.object({
+        card_index: z.number(),
+        components: z.array(z.object({
+          type: z.enum(['HEADER', 'BODY', 'FOOTER', 'BUTTONS']),
+          parameters: z.array(z.object({
+            type: z.enum(['TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT', 'payload']),
+            text: z.string().optional(),
+            image: z.object({
+              link: z.string().url().optional(),
+              id: z.string().optional()
+            }).optional(),
+            video: z.object({
+              link: z.string().url().optional(),
+              id: z.string().optional()
+            }).optional(),
+            document: z.object({
+              link: z.string().url().optional(),
+              id: z.string().optional()
+            }).optional(),
+            payload: z.string().optional()
+          }))
+        }))
+      })).optional(),
+      // Location header support
+      locationParameters: z.object({
+        longitude: z.number(),
+        latitude: z.number(),
+        name: z.string().optional().default(''),
+        address: z.string().optional().default('')
+      }).optional(),
     }).refine((b) => (b.phoneNumbers && b.phoneNumbers.length) || (b.contactIds && b.contactIds.length), {
       message: 'Provide phoneNumbers or contactIds'
     });
@@ -530,20 +561,75 @@ router.post("/send", authenticateToken, async (req, res) => {
 
             console.log('Debug - Full message payload:', JSON.stringify(messagePayload, null, 2));
 
-          if (body.parameters && body.parameters.length > 0) {
-            (messagePayload.template as any).components = body.parameters;
-          } else {
-            const builtComponents: any[] = [];
-            if (body.headerMedia) {
-              const mediaType = body.headerMedia.type; // image | video | document
-              const mediaPayload: any = {};
-              if (body.headerMedia.id) mediaPayload.id = body.headerMedia.id;
-              if (body.headerMedia.link) mediaPayload.link = body.headerMedia.link;
+            if (body.parameters && body.parameters.length > 0) {
+              (messagePayload.template as any).components = body.parameters;
+            } else if (body.carouselCards && body.carouselCards.length > 0) {
+              // Handle carousel template
+              const builtComponents: any[] = [];
+              
+              // Add BODY component if bodyParams exist
+              if (body.bodyParams && body.bodyParams.length > 0) {
+                const sanitizedParams = body.bodyParams.map((txt) => {
+                  const raw = typeof txt === 'string' ? txt : '';
+                  const isConst = raw.startsWith('CONST:');
+                  const val = isConst ? raw.replace(/^CONST:/, '') : raw;
+                  const t = val.trim();
+                  return t.length > 0 ? t : '-';
+                });
+                builtComponents.push({
+                  type: 'BODY',
+                  parameters: sanitizedParams.map((txt) => ({ type: 'TEXT', text: txt }))
+                });
+              }
+              
+              // Add CAROUSEL component
               builtComponents.push({
-                type: 'header',
-                parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
+                type: 'CAROUSEL',
+                cards: body.carouselCards.map((card: any) => ({
+                  card_index: card.card_index,
+                  components: card.components.map((comp: any) => ({
+                    type: comp.type,
+                    parameters: comp.parameters.map((param: any) => {
+                      const paramObj: any = { type: param.type };
+                      if (param.text) paramObj.text = param.text;
+                      if (param.image) paramObj.image = param.image;
+                      if (param.video) paramObj.video = param.video;
+                      if (param.document) paramObj.document = param.document;
+                      if (param.payload) paramObj.payload = param.payload;
+                      return paramObj;
+                    })
+                  }))
+                }))
               });
-            }
+              
+              (messagePayload.template as any).components = builtComponents;
+            } else {
+              const builtComponents: any[] = [];
+              if (body.headerMedia) {
+                const mediaType = body.headerMedia.type; // image | video | document
+                const mediaPayload: any = {};
+                if (body.headerMedia.id) mediaPayload.id = body.headerMedia.id;
+                if (body.headerMedia.link) mediaPayload.link = body.headerMedia.link;
+                builtComponents.push({
+                  type: 'header',
+                  parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
+                });
+              }
+              // LOCATION header
+              if (body.locationParameters && typeof body.locationParameters.latitude === 'number' && typeof body.locationParameters.longitude === 'number') {
+                builtComponents.push({
+                  type: 'header',
+                  parameters: [{
+                    type: 'location',
+                    location: {
+                      latitude: body.locationParameters.latitude,
+                      longitude: body.locationParameters.longitude,
+                      name: body.locationParameters.name || '',
+                      address: body.locationParameters.address || ''
+                    }
+                  }]
+                });
+              }
             // Resolve BODY parameters per recipient using variableMapping (preferred)
             // else fall back to uniform bodyParams
             let resolvedBodyParams: string[] | undefined;

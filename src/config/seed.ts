@@ -3,7 +3,8 @@ import bcrypt from 'bcryptjs';
 
 export async function seedDatabase() {
   try {
-    console.log('Seeding database with sample data...');
+    console.log('Database seeding is disabled - no data will be seeded');
+    return; // Exit early - no seeding
     
     // Create default super admin user if not exists
     const existingAdmin = await pool.query(
