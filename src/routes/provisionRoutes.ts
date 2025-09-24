@@ -70,7 +70,7 @@ router.post("/business", authenticateToken, async (req, res) => {
       password: passwordHash,
     };
 
-    const url = 'http://localhost:8000/api/business/provision/';
+    const url = 'https://api-dashboard.shopzo.app/api/business/provision/';
     const headers: Record<string, string> = {
       'accept': 'application/json',
       'Content-Type': 'application/json',
