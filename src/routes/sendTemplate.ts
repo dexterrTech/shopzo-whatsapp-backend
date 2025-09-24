@@ -311,6 +311,8 @@ router.post("/send", authenticateToken, async (req, res) => {
         field: z.string(),
         fallback: z.string().optional().default("")
       })).optional(),
+      // Explicit per-card text values for carousel placeholders: key 'card_<index>_<n>' -> text
+      carouselTextVars: z.record(z.string(), z.string()).optional(),
       // Carousel template support
       carouselCards: z.array(z.object({
         card_index: z.number(),
@@ -566,10 +568,60 @@ router.post("/send", authenticateToken, async (req, res) => {
             } else if (body.carouselCards && body.carouselCards.length > 0) {
               // Handle carousel template
               const builtComponents: any[] = [];
-              
-              // Add BODY component if bodyParams exist
+
+              // Resolve BODY parameters (support variableMapping like non-carousel flow)
+              let resolvedBodyParams: string[] | undefined;
+              if (body.variableMapping && Array.isArray((body as any).contactIds) && (body as any).contactIds.length > 0) {
+                try {
+                  const cid = Number((body as any).contactIds[i]);
+                  if (!Number.isNaN(cid)) {
+                    const cr = await client.query('SELECT * FROM contacts WHERE id = $1 AND user_id = $2 LIMIT 1', [cid, userId]);
+                    const contact = cr.rows[0] || {};
+                    const entries = Object.entries(body.variableMapping).sort(([a],[b]) => Number(a) - Number(b));
+                    const arr: string[] = [];
+                    for (const [k, cfg] of entries) {
+                      const n = Number(k);
+                      const val = contact[cfg.field as keyof typeof contact];
+                      const text = (val === undefined || val === null || String(val).trim() === '') ? (cfg.fallback || '') : String(val);
+                      arr[n - 1] = text;
+                    }
+                    resolvedBodyParams = arr;
+                  }
+                } catch {}
+              }
+              // Merge per-recipient and uniform bodyParams
+              if (body.bodyParamsPerRecipient && Array.isArray(body.bodyParamsPerRecipient[i])) {
+                const perRec = (body.bodyParamsPerRecipient[i] as any[]).map((v) => (v ?? '')) as string[];
+                if (!resolvedBodyParams) {
+                  resolvedBodyParams = perRec;
+                } else {
+                  for (let j = 0; j < perRec.length; j++) {
+                    if (resolvedBodyParams[j] === undefined || resolvedBodyParams[j] === '') {
+                      resolvedBodyParams[j] = perRec[j];
+                    }
+                  }
+                }
+              }
               if (body.bodyParams && body.bodyParams.length > 0) {
-                const sanitizedParams = body.bodyParams.map((txt) => {
+                const uniform = (body.bodyParams as any[]).map((v) => (v ?? '')) as string[];
+                if (!resolvedBodyParams) {
+                  resolvedBodyParams = uniform;
+                } else {
+                  for (let j = 0; j < uniform.length; j++) {
+                    if (resolvedBodyParams[j] === undefined || resolvedBodyParams[j] === '') {
+                      resolvedBodyParams[j] = uniform[j];
+                    }
+                  }
+                }
+              }
+              if (resolvedBodyParams && resolvedBodyParams.length > 0) {
+                const denseParams = Array.from({ length: resolvedBodyParams.length }, (_, idx) => {
+                  const v = (resolvedBodyParams as any)[idx];
+                  if (v === null || v === undefined) return '';
+                  const s = typeof v === 'string' ? v : String(v);
+                  return s;
+                });
+                const sanitizedParams = denseParams.map((txt) => {
                   const raw = typeof txt === 'string' ? txt : '';
                   const isConst = raw.startsWith('CONST:');
                   const val = isConst ? raw.replace(/^CONST:/, '') : raw;
@@ -581,26 +633,62 @@ router.post("/send", authenticateToken, async (req, res) => {
                   parameters: sanitizedParams.map((txt) => ({ type: 'TEXT', text: txt }))
                 });
               }
-              
+
               // Add CAROUSEL component
               builtComponents.push({
                 type: 'CAROUSEL',
                 cards: body.carouselCards.map((card: any) => ({
                   card_index: card.card_index,
-                  components: card.components.map((comp: any) => ({
-                    type: comp.type,
-                    parameters: comp.parameters.map((param: any) => {
-                      const paramObj: any = { type: param.type };
-                      if (param.text) paramObj.text = param.text;
-                      if (param.image) paramObj.image = param.image;
-                      if (param.video) paramObj.video = param.video;
-                      if (param.document) paramObj.document = param.document;
-                      if (param.payload) paramObj.payload = param.payload;
-                      return paramObj;
-                    })
-                  }))
+                  components: (card.components || []).map((comp: any) => {
+                    // Normalize BODY components to parameters expected by Interakt
+                    if (String(comp.type).toUpperCase() === 'BODY') {
+                      // Prefer deriving from comp.text placeholders if present
+                      const text: string = typeof comp.text === 'string' ? comp.text : '';
+                      const matches = text.match(/\{\{\d+\}\}/g) || [];
+                      if (matches.length > 0) {
+                        // Build values using variableMapping keys like card_<index>_<n>
+                        const indices = matches.map((m) => Number(m.replace(/[^\d]/g, '')));
+                        const maxIdx = indices.reduce((max, n) => Math.max(max, n), 0);
+                        const params = Array.from({ length: maxIdx }, (_, k) => {
+                          const n = k + 1;
+                          const key = `card_${card.card_index}_${n}`;
+                          const explicit = (body as any).carouselTextVars ? (body as any).carouselTextVars[key] : undefined;
+                          const cfg = (body as any).variableMapping ? (body as any).variableMapping[key] : undefined;
+                          const rawVal = explicit ?? cfg?.text ?? '';
+                          const val = typeof rawVal === 'string' ? rawVal.trim() : String(rawVal ?? '').trim();
+                          return { type: 'text', text: val.length > 0 ? (explicit ?? (cfg?.text as string)) : '-' };
+                        });
+                        return { type: 'BODY', parameters: params };
+                      }
+
+                      // No placeholders detected; if a literal text was given, send as single TEXT param
+                      const literal = (text || '').trim();
+                      return {
+                        type: 'BODY',
+                        parameters: [{ type: 'text', text: literal.length > 0 ? text : '-' }]
+                      };
+                    }
+
+                    // Non-BODY components: pass through with sanitized parameters
+                    return {
+                      type: String(comp.type).toUpperCase(),
+                      parameters: Array.isArray(comp.parameters) ? comp.parameters.map((param: any) => {
+                        const paramObj: any = { type: param.type };
+                        if (param.text) paramObj.text = param.text;
+                        if (param.image) paramObj.image = param.image;
+                        if (param.video) paramObj.video = param.video;
+                        if (param.document) paramObj.document = param.document;
+                        if (param.payload) paramObj.payload = param.payload;
+                        return paramObj;
+                      }) : []
+                    };
+                  })
                 }))
               });
+
+              try {
+                console.log('Debug - Built carousel components:', JSON.stringify(builtComponents, null, 2));
+              } catch {}
               
               (messagePayload.template as any).components = builtComponents;
             } else {
