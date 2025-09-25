@@ -490,13 +490,14 @@ router.post("/", authenticateToken, async (req, res) => {
       language: z.string().min(2).max(5),
       category: z.enum(["MARKETING", "UTILITY", "AUTHENTICATION"]),
       components: z.array(z.object({
-        type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS", "CAROUSEL"]),
+        type: z.enum(["HEADER", "BODY", "FOOTER", "BUTTONS", "CAROUSEL", "limited_time_offer"]),
         text: z.string().optional(),
         format: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION"]).optional(),
         example: z.any().optional(),
+        has_expiration: z.boolean().optional(),
         buttons: z.array(z.object({
-          type: z.enum(["URL", "PHONE", "PHONE_NUMBER", "QUICK_REPLY"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
-          text: z.string(),
+          type: z.enum(["URL", "PHONE", "PHONE_NUMBER", "QUICK_REPLY", "COPY_CODE"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
+          text: z.string().optional(),
           url: z.string().optional(),
           phone_number: z.string().optional(),
           example: z.string().optional()
@@ -508,8 +509,8 @@ router.post("/", authenticateToken, async (req, res) => {
             format: z.enum(["IMAGE", "VIDEO"]).optional(),
             example: z.any().optional(),
             buttons: z.array(z.object({
-              type: z.enum(["URL", "PHONE", "PHONE_NUMBER", "QUICK_REPLY"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
-              text: z.string(),
+              type: z.enum(["URL", "PHONE", "PHONE_NUMBER", "QUICK_REPLY", "COPY_CODE"]).transform((v) => (v === 'PHONE' ? 'PHONE_NUMBER' : v)),
+              text: z.string().optional(),
               url: z.string().optional(),
               phone_number: z.string().optional(),
               example: z.string().optional()
@@ -582,11 +583,18 @@ router.post("/", authenticateToken, async (req, res) => {
               vals = Array.from({ length: n }, (_, i) => `Example ${i + 1}`);
             }
             out.example = { body_text: [vals] };
-          } else {
-            // Even if no placeholders, we need to provide an example
-            out.example = { body_text: [["Example"]] };
           }
           return out;
+        }
+        if (comp.type === 'limited_time_offer') {
+          // Handle limited time offer component
+          return {
+            type: 'limited_time_offer',
+            limited_time_offer: {
+              text: comp.text || 'Special Offer!',
+              has_expiration: comp.has_expiration || true
+            }
+          };
         }
         if (comp.type === 'HEADER' && (comp.format === 'TEXT' || !comp.format)) {
           const n = countPlaceholders(comp.text);
@@ -644,6 +652,11 @@ router.post("/", authenticateToken, async (req, res) => {
               return {
                 type: 'QUICK_REPLY',
                 text: btn.text || ''
+              };
+            } else if (btn.type === 'COPY_CODE') {
+              return {
+                type: 'COPY_CODE',
+                example: btn.example || btn.text || 'CODE123'
               };
             }
             return btn;
@@ -709,6 +722,11 @@ router.post("/", authenticateToken, async (req, res) => {
                         type: 'QUICK_REPLY',
                         text: btn.text || ''
                       };
+                    } else if (btn.type === 'COPY_CODE') {
+                      return {
+                        type: 'COPY_CODE',
+                        example: btn.example || btn.text || 'CODE123'
+                      };
                     }
                     return btn;
                   });
@@ -725,10 +743,24 @@ router.post("/", authenticateToken, async (req, res) => {
         return comp;
       }
 
+      // Map short language codes to full locale codes expected by API
+      function normalizeLanguage(lang: string): string {
+        const map: Record<string, string> = {
+          en: 'en_US',
+          es: 'es_ES',
+          fr: 'fr_FR',
+          pt: 'pt_BR',
+          de: 'de_DE',
+          it: 'it_IT',
+          ar: 'ar',
+        };
+        return map[lang] || lang;
+      }
+
       // Prepare template payload for Interakt
       const templatePayload = {
         name: sanitizedName,
-        language: body.language,
+        language: normalizeLanguage(body.language),
         category: body.category,
         components: body.components.map(normalizeComponent)
       };

@@ -292,7 +292,7 @@ router.post("/send", authenticateToken, async (req, res) => {
     }
 
     const bodySchema = z.object({
-      campaignId: z.string(),
+      campaignId: z.string().optional(),
       phoneNumbers: z.array(z.string()).optional(),
       contactIds: z.array(z.string()).optional(),
       templateName: z.string(),
@@ -401,20 +401,23 @@ router.post("/send", authenticateToken, async (req, res) => {
          });
        }
 
-      // Verify campaign exists and belongs to user (keep SQL here for now if no Prisma model)
-      const campaignResult = await pool.query(
-        'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
-        [body.campaignId, userId]
-      );
+      // Optionally verify campaign exists and belongs to user
+      let campaign: any = null;
+      if (body.campaignId) {
+        const campaignResult = await pool.query(
+          'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
+          [body.campaignId, userId]
+        );
 
-      if (campaignResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Campaign not found'
-        });
+        if (campaignResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'Campaign not found'
+          });
+        }
+
+        campaign = campaignResult.rows[0];
       }
-
-      const campaign = campaignResult.rows[0];
 
              // Use the original template name as provided by the user
       // Interakt expects the exact template name as it appears in their system
@@ -871,19 +874,21 @@ router.post("/send", authenticateToken, async (req, res) => {
                 }
               }, 5000); // Check after 5 seconds
               
-              const messageLog = {
-                campaignId: body.campaignId,
-                to: formattedPhoneNumber,
-                templateName: body.templateName,
-                languageCode: body.languageCode,
-                messageId: messageId,
-                status: 'SENT',
-                sentAt: new Date().toISOString(),
-                userId: userId,
-                createdAt: new Date().toISOString()
-              } as any;
+              if (body.campaignId) {
+                const messageLog = {
+                  campaignId: body.campaignId,
+                  to: formattedPhoneNumber,
+                  templateName: body.templateName,
+                  languageCode: body.languageCode,
+                  messageId: messageId,
+                  status: 'SENT',
+                  sentAt: new Date().toISOString(),
+                  userId: userId,
+                  createdAt: new Date().toISOString()
+                } as any;
 
-            messageLogs.push(messageLog);
+                messageLogs.push(messageLog);
+              }
 
               // Billing: upsert billing log and hold funds in suspense for this message
               try {
@@ -924,25 +929,28 @@ router.post("/send", authenticateToken, async (req, res) => {
             results.push({
               contactId: phoneNumber, // Store the original phone number as contactId
               status: 'success',
-              messageId: messageLog.messageId,
+              messageId: messageId,
               interaktResponse: interaktData
             });
           } else {
                          // Failed - log error
-             const messageLog = {
-               campaignId: body.campaignId,
-               to: formattedPhoneNumber,
-               templateName: body.templateName,
-               languageCode: body.languageCode,
-               messageId: `failed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-               status: 'FAILED',
-               failedAt: new Date().toISOString(),
-               errorMessage: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
-               userId: userId,
-               createdAt: new Date().toISOString()
-             };
+            const failedId = `failed-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            if (body.campaignId) {
+              const messageLog = {
+                campaignId: body.campaignId,
+                to: formattedPhoneNumber,
+                templateName: body.templateName,
+                languageCode: body.languageCode,
+                messageId: failedId,
+                status: 'FAILED',
+                failedAt: new Date().toISOString(),
+                errorMessage: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
+                userId: userId,
+                createdAt: new Date().toISOString()
+              };
 
-            messageLogs.push(messageLog);
+              messageLogs.push(messageLog);
+            }
 
             // Billing: hold funds even if failed (charged on attempts)
             try {
@@ -959,7 +967,7 @@ router.post("/send", authenticateToken, async (req, res) => {
 
               const ins = await upsertBillingLog({
                 userId,
-                conversationId: (messageLog as any).messageId,
+                conversationId: failedId,
                 category,
                 recipientNumber: formattedPhoneNumber,
                 startTime: new Date(),
@@ -972,7 +980,7 @@ router.post("/send", authenticateToken, async (req, res) => {
                 const row = amtRes.rows[0];
                 console.log('Billing: fetched amount for hold (failure path):', row);
                 if (row) {
-                  await holdWalletInSuspenseForBilling({ userId, conversationId: (messageLog as any).messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                  await holdWalletInSuspenseForBilling({ userId, conversationId: failedId, amountPaise: row.amount_paise, currency: row.amount_currency });
                   console.log('Billing: holdWalletInSuspenseForBilling done (failure path)');
                 }
               }
@@ -983,6 +991,7 @@ router.post("/send", authenticateToken, async (req, res) => {
             results.push({
               contactId: phoneNumber, // Store the original phone number as contactId
               status: 'failed',
+              messageId: failedId,
               error: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
               interaktResponse: interaktData
             });
@@ -990,20 +999,23 @@ router.post("/send", authenticateToken, async (req, res) => {
 
         } catch (error: any) {
                      // Individual contact error
-           const messageLog = {
-             campaignId: body.campaignId,
-             to: formattedPhoneNumber,
-             templateName: body.templateName,
-             languageCode: body.languageCode,
-             messageId: `error-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-             status: 'FAILED',
-             failedAt: new Date().toISOString(),
-             errorMessage: error.message || 'Unknown error',
-             userId: userId,
-             createdAt: new Date().toISOString()
-           };
+          const errorId = `error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          if (body.campaignId) {
+            const messageLog = {
+              campaignId: body.campaignId,
+              to: formattedPhoneNumber,
+              templateName: body.templateName,
+              languageCode: body.languageCode,
+              messageId: errorId,
+              status: 'FAILED',
+              failedAt: new Date().toISOString(),
+              errorMessage: error.message || 'Unknown error',
+              userId: userId,
+              createdAt: new Date().toISOString()
+            };
 
-          messageLogs.push(messageLog);
+            messageLogs.push(messageLog);
+          }
 
           // Billing: hold funds for attempted send when exception occurs
           try {
@@ -1020,7 +1032,7 @@ router.post("/send", authenticateToken, async (req, res) => {
 
             const ins = await upsertBillingLog({
               userId,
-              conversationId: (messageLog as any).messageId,
+              conversationId: errorId,
               category,
               recipientNumber: formattedPhoneNumber,
               startTime: new Date(),
@@ -1033,7 +1045,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               const row = amtRes.rows[0];
               console.log('Billing: fetched amount for hold (exception path):', row);
               if (row) {
-                await holdWalletInSuspenseForBilling({ userId, conversationId: (messageLog as any).messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                await holdWalletInSuspenseForBilling({ userId, conversationId: errorId, amountPaise: row.amount_paise, currency: row.amount_currency });
                 console.log('Billing: holdWalletInSuspenseForBilling done (exception path)');
               }
             }
@@ -1049,8 +1061,8 @@ router.post("/send", authenticateToken, async (req, res) => {
         }
       }
 
-      // Insert message logs into database
-      if (messageLogs.length > 0) {
+      // Insert message logs into database (only if a campaignId was provided)
+      if (body.campaignId && messageLogs.length > 0) {
         const values = messageLogs.map((log, index) => {
           const offset = index * 8;
           return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8})`;
@@ -1080,21 +1092,23 @@ router.post("/send", authenticateToken, async (req, res) => {
       const successCount = results.filter(r => r.status === 'success').length;
       const totalCount = results.length;
 
-      if (successCount === totalCount) {
-        await client.query(
-          'UPDATE campaigns SET status = $1, completed_at = NOW() WHERE id = $2',
-          ['COMPLETED', body.campaignId]
-        );
-      } else if (successCount > 0) {
-        await client.query(
-          'UPDATE campaigns SET status = $1 WHERE id = $2',
-          ['PARTIALLY_COMPLETED', body.campaignId]
-        );
-      } else {
-        await client.query(
-          'UPDATE campaigns SET status = $1 WHERE id = $2',
-          ['FAILED', body.campaignId]
-        );
+      if (body.campaignId) {
+        if (successCount === totalCount) {
+          await client.query(
+            'UPDATE campaigns SET status = $1, completed_at = NOW() WHERE id = $2',
+            ['COMPLETED', body.campaignId]
+          );
+        } else if (successCount > 0) {
+          await client.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['PARTIALLY_COMPLETED', body.campaignId]
+          );
+        } else {
+          await client.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['FAILED', body.campaignId]
+          );
+        }
       }
 
       res.json({
