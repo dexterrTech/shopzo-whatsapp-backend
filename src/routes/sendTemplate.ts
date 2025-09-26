@@ -292,7 +292,7 @@ router.post("/send", authenticateToken, async (req, res) => {
     }
 
     const bodySchema = z.object({
-      campaignId: z.string(),
+      campaignId: z.string().optional(),
       phoneNumbers: z.array(z.string()).optional(),
       contactIds: z.array(z.string()).optional(),
       templateName: z.string(),
@@ -311,6 +311,44 @@ router.post("/send", authenticateToken, async (req, res) => {
         field: z.string(),
         fallback: z.string().optional().default("")
       })).optional(),
+      // Explicit per-card text values for carousel placeholders: key 'card_<index>_<n>' -> text
+      carouselTextVars: z.record(z.string(), z.string()).optional(),
+      // Carousel template support
+      carouselCards: z.array(z.object({
+        card_index: z.number(),
+        components: z.array(z.object({
+          type: z.enum(['HEADER', 'BODY', 'FOOTER', 'BUTTONS']),
+          parameters: z.array(z.object({
+            type: z.enum(['TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT', 'payload']),
+            text: z.string().optional(),
+            image: z.object({
+              link: z.string().url().optional(),
+              id: z.string().optional()
+            }).optional(),
+            video: z.object({
+              link: z.string().url().optional(),
+              id: z.string().optional()
+            }).optional(),
+            document: z.object({
+              link: z.string().url().optional(),
+              id: z.string().optional()
+            }).optional(),
+            payload: z.string().optional()
+          }))
+        }))
+      })).optional(),
+      // Location header support
+      locationParameters: z.object({
+        longitude: z.number(),
+        latitude: z.number(),
+        name: z.string().optional().default(''),
+        address: z.string().optional().default('')
+      }).optional(),
+      // Advanced: Limited Time Offer/coupon/URL buttons
+      limitedTimeOfferExpirationMs: z.number().optional(),
+      couponCode: z.string().optional(),
+      urlButtonTextParam: z.string().optional(),
+      urlButtonIndex: z.coerce.number().int().min(0).optional(),
     }).refine((b) => (b.phoneNumbers && b.phoneNumbers.length) || (b.contactIds && b.contactIds.length), {
       message: 'Provide phoneNumbers or contactIds'
     });
@@ -368,20 +406,23 @@ router.post("/send", authenticateToken, async (req, res) => {
          });
        }
 
-      // Verify campaign exists and belongs to user (keep SQL here for now if no Prisma model)
-      const campaignResult = await pool.query(
-        'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
-        [body.campaignId, userId]
-      );
+      // Optionally verify campaign exists and belongs to user
+      let campaign: any = null;
+      if (body.campaignId) {
+        const campaignResult = await pool.query(
+          'SELECT * FROM campaigns WHERE id = $1 AND user_id = $2',
+          [body.campaignId, userId]
+        );
 
-      if (campaignResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Campaign not found'
-        });
+        if (campaignResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'Campaign not found'
+          });
+        }
+
+        campaign = campaignResult.rows[0];
       }
-
-      const campaign = campaignResult.rows[0];
 
              // Use the original template name as provided by the user
       // Interakt expects the exact template name as it appears in their system
@@ -523,27 +564,168 @@ router.post("/send", authenticateToken, async (req, res) => {
               template: {
                 name: templateName,
                 language: {
-                  code: body.languageCode.split('_')[0] // Convert 'en_US' to 'en'
+                  code: body.languageCode // Use full locale like 'en_US' when provided
                 }
               }
             };
 
             console.log('Debug - Full message payload:', JSON.stringify(messagePayload, null, 2));
 
-          if (body.parameters && body.parameters.length > 0) {
-            (messagePayload.template as any).components = body.parameters;
-          } else {
-            const builtComponents: any[] = [];
-            if (body.headerMedia) {
-              const mediaType = body.headerMedia.type; // image | video | document
-              const mediaPayload: any = {};
-              if (body.headerMedia.id) mediaPayload.id = body.headerMedia.id;
-              if (body.headerMedia.link) mediaPayload.link = body.headerMedia.link;
+            if (body.parameters && body.parameters.length > 0) {
+              (messagePayload.template as any).components = body.parameters;
+            } else if (body.carouselCards && body.carouselCards.length > 0) {
+              // Handle carousel template
+              const builtComponents: any[] = [];
+
+              // Resolve BODY parameters (support variableMapping like non-carousel flow)
+              let resolvedBodyParams: string[] | undefined;
+              if (body.variableMapping && Array.isArray((body as any).contactIds) && (body as any).contactIds.length > 0) {
+                try {
+                  const cid = Number((body as any).contactIds[i]);
+                  if (!Number.isNaN(cid)) {
+                    const cr = await client.query('SELECT * FROM contacts WHERE id = $1 AND user_id = $2 LIMIT 1', [cid, userId]);
+                    const contact = cr.rows[0] || {};
+                    const entries = Object.entries(body.variableMapping).sort(([a],[b]) => Number(a) - Number(b));
+                    const arr: string[] = [];
+                    for (const [k, cfg] of entries) {
+                      const n = Number(k);
+                      const val = contact[cfg.field as keyof typeof contact];
+                      const text = (val === undefined || val === null || String(val).trim() === '') ? (cfg.fallback || '') : String(val);
+                      arr[n - 1] = text;
+                    }
+                    resolvedBodyParams = arr;
+                  }
+                } catch {}
+              }
+              // Merge per-recipient and uniform bodyParams
+              if (body.bodyParamsPerRecipient && Array.isArray(body.bodyParamsPerRecipient[i])) {
+                const perRec = (body.bodyParamsPerRecipient[i] as any[]).map((v) => (v ?? '')) as string[];
+                if (!resolvedBodyParams) {
+                  resolvedBodyParams = perRec;
+                } else {
+                  for (let j = 0; j < perRec.length; j++) {
+                    if (resolvedBodyParams[j] === undefined || resolvedBodyParams[j] === '') {
+                      resolvedBodyParams[j] = perRec[j];
+                    }
+                  }
+                }
+              }
+              if (body.bodyParams && body.bodyParams.length > 0) {
+                const uniform = (body.bodyParams as any[]).map((v) => (v ?? '')) as string[];
+                if (!resolvedBodyParams) {
+                  resolvedBodyParams = uniform;
+                } else {
+                  for (let j = 0; j < uniform.length; j++) {
+                    if (resolvedBodyParams[j] === undefined || resolvedBodyParams[j] === '') {
+                      resolvedBodyParams[j] = uniform[j];
+                    }
+                  }
+                }
+              }
+              if (resolvedBodyParams && resolvedBodyParams.length > 0) {
+                const denseParams = Array.from({ length: resolvedBodyParams.length }, (_, idx) => {
+                  const v = (resolvedBodyParams as any)[idx];
+                  if (v === null || v === undefined) return '';
+                  const s = typeof v === 'string' ? v : String(v);
+                  return s;
+                });
+                const sanitizedParams = denseParams.map((txt) => {
+                  const raw = typeof txt === 'string' ? txt : '';
+                  const isConst = raw.startsWith('CONST:');
+                  const val = isConst ? raw.replace(/^CONST:/, '') : raw;
+                  const t = val.trim();
+                  return t.length > 0 ? t : '-';
+                });
+                builtComponents.push({
+                  type: 'BODY',
+                  parameters: sanitizedParams.map((txt) => ({ type: 'TEXT', text: txt }))
+                });
+              }
+
+              // Add CAROUSEL component
               builtComponents.push({
-                type: 'header',
-                parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
+                type: 'CAROUSEL',
+                cards: body.carouselCards.map((card: any) => ({
+                  card_index: card.card_index,
+                  components: (card.components || []).map((comp: any) => {
+                    // Normalize BODY components to parameters expected by Interakt
+                    if (String(comp.type).toUpperCase() === 'BODY') {
+                      // Prefer deriving from comp.text placeholders if present
+                      const text: string = typeof comp.text === 'string' ? comp.text : '';
+                      const matches = text.match(/\{\{\d+\}\}/g) || [];
+                      if (matches.length > 0) {
+                        // Build values using variableMapping keys like card_<index>_<n>
+                        const indices = matches.map((m) => Number(m.replace(/[^\d]/g, '')));
+                        const maxIdx = indices.reduce((max, n) => Math.max(max, n), 0);
+                        const params = Array.from({ length: maxIdx }, (_, k) => {
+                          const n = k + 1;
+                          const key = `card_${card.card_index}_${n}`;
+                          const explicit = (body as any).carouselTextVars ? (body as any).carouselTextVars[key] : undefined;
+                          const cfg = (body as any).variableMapping ? (body as any).variableMapping[key] : undefined;
+                          const rawVal = explicit ?? cfg?.text ?? '';
+                          const val = typeof rawVal === 'string' ? rawVal.trim() : String(rawVal ?? '').trim();
+                          return { type: 'text', text: val.length > 0 ? (explicit ?? (cfg?.text as string)) : '-' };
+                        });
+                        return { type: 'BODY', parameters: params };
+                      }
+
+                      // No placeholders detected; if a literal text was given, send as single TEXT param
+                      const literal = (text || '').trim();
+                      return {
+                        type: 'BODY',
+                        parameters: [{ type: 'text', text: literal.length > 0 ? text : '-' }]
+                      };
+                    }
+
+                    // Non-BODY components: pass through with sanitized parameters
+                    return {
+                      type: String(comp.type).toUpperCase(),
+                      parameters: Array.isArray(comp.parameters) ? comp.parameters.map((param: any) => {
+                        const paramObj: any = { type: param.type };
+                        if (param.text) paramObj.text = param.text;
+                        if (param.image) paramObj.image = param.image;
+                        if (param.video) paramObj.video = param.video;
+                        if (param.document) paramObj.document = param.document;
+                        if (param.payload) paramObj.payload = param.payload;
+                        return paramObj;
+                      }) : []
+                    };
+                  })
+                }))
               });
-            }
+
+              try {
+                console.log('Debug - Built carousel components:', JSON.stringify(builtComponents, null, 2));
+              } catch {}
+              
+              (messagePayload.template as any).components = builtComponents;
+            } else {
+              const builtComponents: any[] = [];
+              if (body.headerMedia) {
+                const mediaType = body.headerMedia.type; // image | video | document
+                const mediaPayload: any = {};
+                if (body.headerMedia.id) mediaPayload.id = body.headerMedia.id;
+                if (body.headerMedia.link) mediaPayload.link = body.headerMedia.link;
+                builtComponents.push({
+                  type: 'header',
+                  parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
+                });
+              }
+              // LOCATION header
+              if (body.locationParameters && typeof body.locationParameters.latitude === 'number' && typeof body.locationParameters.longitude === 'number') {
+                builtComponents.push({
+                  type: 'header',
+                  parameters: [{
+                    type: 'location',
+                    location: {
+                      latitude: body.locationParameters.latitude,
+                      longitude: body.locationParameters.longitude,
+                      name: body.locationParameters.name || '',
+                      address: body.locationParameters.address || ''
+                    }
+                  }]
+                });
+              }
             // Resolve BODY parameters per recipient using variableMapping (preferred)
             // else fall back to uniform bodyParams
             let resolvedBodyParams: string[] | undefined;
@@ -612,6 +794,44 @@ router.post("/send", authenticateToken, async (req, res) => {
                 parameters: sanitizedParams.map((txt) => ({ type: 'text', text: txt }))
               });
             }
+            // LIMITED_TIME_OFFER parameter
+            if (typeof (body as any).limitedTimeOfferExpirationMs === 'number') {
+              builtComponents.push({
+                type: 'limited_time_offer',
+                parameters: [
+                  {
+                    type: 'limited_time_offer',
+                    limited_time_offer: { expiration_time_ms: (body as any).limitedTimeOfferExpirationMs }
+                  }
+                ]
+              });
+            }
+
+            // COPY_CODE button
+            if ((body as any).couponCode && String((body as any).couponCode).trim().length > 0) {
+              builtComponents.push({
+                type: 'button',
+                sub_type: 'copy_code',
+                index: 0,
+                parameters: [
+                  { type: 'coupon_code', coupon_code: String((body as any).couponCode).trim() }
+                ]
+              });
+            }
+
+            // URL button
+            if ((body as any).urlButtonTextParam && String((body as any).urlButtonTextParam).trim().length > 0) {
+              const idx = typeof (body as any).urlButtonIndex === 'number' ? (body as any).urlButtonIndex : 1;
+              builtComponents.push({
+                type: 'button',
+                sub_type: 'url',
+                index: idx,
+                parameters: [
+                  { type: 'text', text: String((body as any).urlButtonTextParam).trim() }
+                ]
+              });
+            }
+
             if (builtComponents.length > 0) {
               (messagePayload.template as any).components = builtComponents;
             }
@@ -623,7 +843,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               payload: messagePayload,
               templateName: templateName,
               languageCode: body.languageCode,
-              languageCodeFormatted: body.languageCode.split('_')[0],
+              languageCodeFormatted: body.languageCode,
               phoneNumberId: phoneNumberId,
               wabaId: wabaId,
               headers: {
@@ -633,7 +853,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               }
             });
             
-            const interaktResponse = await fetch(
+            let interaktResponse = await fetch(
               `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
               {
                 method: 'POST',
@@ -663,6 +883,39 @@ router.post("/send", authenticateToken, async (req, res) => {
               // If response is not JSON, use the text content
               console.log('Debug - Interakt Error Text:', responseText);
               interaktData = { error: responseText };
+            }
+
+            // Fallback: If URL button does not require parameters, retry without URL button parameters
+            const urlNoParamsError = typeof interaktData?.error?.error_data?.details === 'string'
+              && interaktData.error.error_data.details.toLowerCase().includes('url does not require parameters');
+            if (!interaktResponse.ok && urlNoParamsError) {
+              try {
+                const cloned = JSON.parse(JSON.stringify(messagePayload));
+                if (Array.isArray(cloned?.template?.components)) {
+                  cloned.template.components = cloned.template.components.filter((c: any) => {
+                    const t = String(c?.type || '').toLowerCase();
+                    const sub = String(c?.sub_type || '').toLowerCase();
+                    return !(t === 'button' && sub === 'url');
+                  });
+                }
+                console.log('Debug - Retrying without URL button parameters');
+                interaktResponse = await fetch(
+                  `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'x-access-token': accessToken,
+                      'x-waba-id': wabaId,
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(cloned)
+                  }
+                );
+                const retryText = await interaktResponse.text();
+                try { interaktData = JSON.parse(retryText); } catch { interaktData = { raw: retryText }; }
+              } catch (e) {
+                console.log('Debug - Retry without URL button failed:', e);
+              }
             }
 
                        if (interaktResponse.ok && !interaktData.error) {
@@ -697,19 +950,21 @@ router.post("/send", authenticateToken, async (req, res) => {
                 }
               }, 5000); // Check after 5 seconds
               
-              const messageLog = {
-                campaignId: body.campaignId,
-                to: formattedPhoneNumber,
-                templateName: body.templateName,
-                languageCode: body.languageCode,
-                messageId: messageId,
-                status: 'SENT',
-                sentAt: new Date().toISOString(),
-                userId: userId,
-                createdAt: new Date().toISOString()
-              } as any;
+              if (body.campaignId) {
+                const messageLog = {
+                  campaignId: body.campaignId,
+                  to: formattedPhoneNumber,
+                  templateName: body.templateName,
+                  languageCode: body.languageCode,
+                  messageId: messageId,
+                  status: 'SENT',
+                  sentAt: new Date().toISOString(),
+                  userId: userId,
+                  createdAt: new Date().toISOString()
+                } as any;
 
-            messageLogs.push(messageLog);
+                messageLogs.push(messageLog);
+              }
 
               // Billing: upsert billing log and hold funds in suspense for this message
               try {
@@ -750,25 +1005,28 @@ router.post("/send", authenticateToken, async (req, res) => {
             results.push({
               contactId: phoneNumber, // Store the original phone number as contactId
               status: 'success',
-              messageId: messageLog.messageId,
+              messageId: messageId,
               interaktResponse: interaktData
             });
           } else {
                          // Failed - log error
-             const messageLog = {
-               campaignId: body.campaignId,
-               to: formattedPhoneNumber,
-               templateName: body.templateName,
-               languageCode: body.languageCode,
-               messageId: `failed-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-               status: 'FAILED',
-               failedAt: new Date().toISOString(),
-               errorMessage: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
-               userId: userId,
-               createdAt: new Date().toISOString()
-             };
+            const failedId = `failed-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            if (body.campaignId) {
+              const messageLog = {
+                campaignId: body.campaignId,
+                to: formattedPhoneNumber,
+                templateName: body.templateName,
+                languageCode: body.languageCode,
+                messageId: failedId,
+                status: 'FAILED',
+                failedAt: new Date().toISOString(),
+                errorMessage: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
+                userId: userId,
+                createdAt: new Date().toISOString()
+              };
 
-            messageLogs.push(messageLog);
+              messageLogs.push(messageLog);
+            }
 
             // Billing: hold funds even if failed (charged on attempts)
             try {
@@ -785,7 +1043,7 @@ router.post("/send", authenticateToken, async (req, res) => {
 
               const ins = await upsertBillingLog({
                 userId,
-                conversationId: (messageLog as any).messageId,
+                conversationId: failedId,
                 category,
                 recipientNumber: formattedPhoneNumber,
                 startTime: new Date(),
@@ -798,7 +1056,7 @@ router.post("/send", authenticateToken, async (req, res) => {
                 const row = amtRes.rows[0];
                 console.log('Billing: fetched amount for hold (failure path):', row);
                 if (row) {
-                  await holdWalletInSuspenseForBilling({ userId, conversationId: (messageLog as any).messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                  await holdWalletInSuspenseForBilling({ userId, conversationId: failedId, amountPaise: row.amount_paise, currency: row.amount_currency });
                   console.log('Billing: holdWalletInSuspenseForBilling done (failure path)');
                 }
               }
@@ -809,6 +1067,7 @@ router.post("/send", authenticateToken, async (req, res) => {
             results.push({
               contactId: phoneNumber, // Store the original phone number as contactId
               status: 'failed',
+              messageId: failedId,
               error: `Interakt API error: ${interaktResponse.status} ${interaktResponse.statusText}`,
               interaktResponse: interaktData
             });
@@ -816,20 +1075,23 @@ router.post("/send", authenticateToken, async (req, res) => {
 
         } catch (error: any) {
                      // Individual contact error
-           const messageLog = {
-             campaignId: body.campaignId,
-             to: formattedPhoneNumber,
-             templateName: body.templateName,
-             languageCode: body.languageCode,
-             messageId: `error-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-             status: 'FAILED',
-             failedAt: new Date().toISOString(),
-             errorMessage: error.message || 'Unknown error',
-             userId: userId,
-             createdAt: new Date().toISOString()
-           };
+          const errorId = `error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          if (body.campaignId) {
+            const messageLog = {
+              campaignId: body.campaignId,
+              to: formattedPhoneNumber,
+              templateName: body.templateName,
+              languageCode: body.languageCode,
+              messageId: errorId,
+              status: 'FAILED',
+              failedAt: new Date().toISOString(),
+              errorMessage: error.message || 'Unknown error',
+              userId: userId,
+              createdAt: new Date().toISOString()
+            };
 
-          messageLogs.push(messageLog);
+            messageLogs.push(messageLog);
+          }
 
           // Billing: hold funds for attempted send when exception occurs
           try {
@@ -846,7 +1108,7 @@ router.post("/send", authenticateToken, async (req, res) => {
 
             const ins = await upsertBillingLog({
               userId,
-              conversationId: (messageLog as any).messageId,
+              conversationId: errorId,
               category,
               recipientNumber: formattedPhoneNumber,
               startTime: new Date(),
@@ -859,7 +1121,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               const row = amtRes.rows[0];
               console.log('Billing: fetched amount for hold (exception path):', row);
               if (row) {
-                await holdWalletInSuspenseForBilling({ userId, conversationId: (messageLog as any).messageId, amountPaise: row.amount_paise, currency: row.amount_currency });
+                await holdWalletInSuspenseForBilling({ userId, conversationId: errorId, amountPaise: row.amount_paise, currency: row.amount_currency });
                 console.log('Billing: holdWalletInSuspenseForBilling done (exception path)');
               }
             }
@@ -875,8 +1137,8 @@ router.post("/send", authenticateToken, async (req, res) => {
         }
       }
 
-      // Insert message logs into database
-      if (messageLogs.length > 0) {
+      // Insert message logs into database (only if a campaignId was provided)
+      if (body.campaignId && messageLogs.length > 0) {
         const values = messageLogs.map((log, index) => {
           const offset = index * 8;
           return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8})`;
@@ -906,21 +1168,23 @@ router.post("/send", authenticateToken, async (req, res) => {
       const successCount = results.filter(r => r.status === 'success').length;
       const totalCount = results.length;
 
-      if (successCount === totalCount) {
-        await client.query(
-          'UPDATE campaigns SET status = $1, completed_at = NOW() WHERE id = $2',
-          ['COMPLETED', body.campaignId]
-        );
-      } else if (successCount > 0) {
-        await client.query(
-          'UPDATE campaigns SET status = $1 WHERE id = $2',
-          ['PARTIALLY_COMPLETED', body.campaignId]
-        );
-      } else {
-        await client.query(
-          'UPDATE campaigns SET status = $1 WHERE id = $2',
-          ['FAILED', body.campaignId]
-        );
+      if (body.campaignId) {
+        if (successCount === totalCount) {
+          await client.query(
+            'UPDATE campaigns SET status = $1, completed_at = NOW() WHERE id = $2',
+            ['COMPLETED', body.campaignId]
+          );
+        } else if (successCount > 0) {
+          await client.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['PARTIALLY_COMPLETED', body.campaignId]
+          );
+        } else {
+          await client.query(
+            'UPDATE campaigns SET status = $1 WHERE id = $2',
+            ['FAILED', body.campaignId]
+          );
+        }
       }
 
       res.json({
@@ -957,6 +1221,7 @@ router.post("/send", authenticateToken, async (req, res) => {
     });
   }
 });
+
 
 /**
  * @swagger
@@ -1075,7 +1340,7 @@ router.post("/cta", authenticateToken, async (req, res) => {
         type: "template",
         template: {
           name: body.templateName,
-          language: { code: body.languageCode.split("_")[0] },
+          language: { code: body.languageCode },
         },
       };
 
