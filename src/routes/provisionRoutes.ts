@@ -15,6 +15,9 @@ const payloadSchema = z.object({
   business_contact_phone: z.string().optional(),
   business_address: z.string().optional(),
   user_id: z.number().int().optional(),
+  // Optional incoming overrides/new fields
+  type: z.enum(["exchange_credentials"]).optional(),
+  waba_email: z.string().email().optional(),
 });
 
 // POST /api/provision/business
@@ -57,8 +60,9 @@ router.post("/business", authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: "User password hash not found" });
     }
 
-    // Build external payload including hashed password
+    // Build external payload including hashed password, new type and waba_email fields
     const externalPayload: any = {
+      type: body.type || "exchange_credentials",
       name: body.name,
       email: body.email,
       mobile_no: body.mobile_no,
@@ -68,6 +72,7 @@ router.post("/business", authenticateToken, async (req, res) => {
       business_contact_phone: body.business_contact_phone,
       business_address: body.business_address,
       password: passwordHash,
+      waba_email: body.waba_email || body.email,
     };
 
     const url = 'https://api-dashboard.shopzo.app/api/business/provision/';
