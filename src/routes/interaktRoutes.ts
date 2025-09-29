@@ -12,7 +12,7 @@ import { WebhookLoggingService } from "../services/webhookLoggingService";
 const router = Router();
 
 // Constants
-const BUSINESS_PROVISION_URL = 'http://localhost:8000/api/business/message/webhook/';
+const BUSINESS_PROVISION_URL = 'https://api-dashboard.shopzo.app/api/business/message/webhook/';
 
 /**
  * @openapi

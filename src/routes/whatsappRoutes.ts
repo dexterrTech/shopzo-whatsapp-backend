@@ -741,7 +741,7 @@ router.post('/update-setup-status', authenticateToken, async (req, res) => {
         const userEmail: string | undefined = userRow.rows?.[0]?.email;
 
         if (userEmail && phoneNumberIdForExchange && settingsWabaId) {
-          const url = 'http://localhost:8000/api/business/message/webhook/';
+          const url = 'https://api-dashboard.shopzo.app/api/business/message/webhook/';
           const headers: Record<string, string> = {
             'accept': 'application/json',
             'Content-Type': 'application/json',
