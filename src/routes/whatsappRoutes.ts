@@ -465,6 +465,7 @@ router.post('/send-test-message', authenticateToken, async (req, res) => {
       WHERE user_id = $1
     `, [userId]);
 
+    console.log('setup_completed', userId);
     // After setup is completed, notify external provision API with waba_exchange
     try {
       const setupRow = await pool.query(
@@ -670,39 +671,116 @@ router.post('/update-setup-status', authenticateToken, async (req, res) => {
       return res.status(401).json({ success: false, message: 'Authentication required' });
     }
 
-    const { status, wallet_verified } = req.body;
+    // Validate input
+    const schema = z.object({
+      status: z.string().optional(),
+      wallet_verified: z.boolean().optional(),
+    });
+    const { status: requestedStatus, wallet_verified } = schema.parse(req.body || {});
 
-    // Check if whatsapp_setups record exists, if not create one
-    const setupCheck = await pool.query(`
-      SELECT id FROM whatsapp_setups WHERE user_id = $1
-    `, [userId]);
+    // Allowed statuses in progression order
+    const allowedStatuses = new Set([
+      'not_started',
+      'embedded_signup_completed',
+      'tp_signup_completed',
+      'wallet_check_completed',
+      'templates_setup_completed',
+      'setup_completed',
+    ]);
 
-    if (setupCheck.rows.length === 0) {
-      // Create a new whatsapp_setups record
-      await pool.query(`
-        INSERT INTO whatsapp_setups (user_id, status, wallet_verified, created_at, updated_at)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `, [userId, status || 'not_started', wallet_verified === true]);
-    } else {
-      // Update existing record
-      await pool.query(`
-        UPDATE whatsapp_setups 
-        SET status = $1, wallet_verified = COALESCE($2, wallet_verified), updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = $3
-      `, [status, wallet_verified, userId]);
+    // Read existing row
+    const existing = await pool.query(
+      'SELECT status FROM whatsapp_setups WHERE user_id = $1 LIMIT 1',
+      [userId]
+    );
+    const currentStatus: string | null = existing.rows?.[0]?.status || null;
+
+    // Compute next status
+    let nextStatus: string | undefined = requestedStatus;
+    if (wallet_verified === true && !requestedStatus) {
+      // If wallet just verified and no explicit status provided, mark setup completed
+      nextStatus = 'setup_completed';
     }
 
-    res.json({
+    if (nextStatus && !allowedStatuses.has(nextStatus)) {
+      return res.status(400).json({ success: false, message: `Invalid status: ${nextStatus}` });
+    }
+
+    // Ensure a non-null status gets written (fallback to current or 'not_started')
+    const statusToWrite = nextStatus ?? currentStatus ?? 'not_started';
+
+    if (existing.rows.length === 0) {
+      // Create a new whatsapp_setups record
+      await pool.query(
+        `INSERT INTO whatsapp_setups (user_id, status, created_at, updated_at)
+         VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [userId, statusToWrite]
+      );
+    } else {
+      // Update existing record
+      await pool.query(
+        `UPDATE whatsapp_setups
+         SET status = $1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $2`,
+        [statusToWrite, userId]
+      );
+    }
+
+    // If status transitioned to setup_completed, send waba_exchange webhook
+    if (statusToWrite === 'setup_completed' && currentStatus !== 'setup_completed') {
+      try {
+        const setupRow = await pool.query(
+          'SELECT phone_number_id, waba_id FROM whatsapp_setups WHERE user_id = $1 LIMIT 1',
+          [userId]
+        );
+        const phoneNumberIdForExchange: string | undefined = setupRow.rows?.[0]?.phone_number_id;
+        const settingsWabaId: string | undefined = setupRow.rows?.[0]?.waba_id;
+
+        const userRow = await pool.query('SELECT email FROM users_whatsapp WHERE id = $1 LIMIT 1', [userId]);
+        const userEmail: string | undefined = userRow.rows?.[0]?.email;
+
+        if (userEmail && phoneNumberIdForExchange && settingsWabaId) {
+          const url = 'http://localhost:8000/api/business/message/webhook/';
+          const headers: Record<string, string> = {
+            'accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-Exchange-Credentials-Secret': 'Dexterr@2492025',
+          };
+          const payload = {
+            type: 'waba_exchange',
+            waba_email: userEmail,
+            phone_number_id: phoneNumberIdForExchange,
+            waba_id: settingsWabaId,
+          } as const;
+          try {
+            await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+          } catch (e) {
+            console.warn('[waba_exchange] Failed to notify local webhook:', (e as any)?.message || e);
+          }
+        } else {
+          console.warn('[waba_exchange] Missing fields to notify local webhook', { userEmail: !!userEmail, phoneNumberIdForExchange, settingsWabaId });
+        }
+      } catch (e) {
+        console.warn('[waba_exchange] Error while preparing local webhook notification:', (e as any)?.message || e);
+      }
+    }
+
+    return res.json({
       success: true,
       message: 'Setup status updated successfully',
       data: {
-        status: status,
-        wallet_verified: wallet_verified
+        previous_status: currentStatus,
+        status: statusToWrite,
+        wallet_verified: wallet_verified === true, // echo back what was requested
       }
     });
   } catch (error) {
     console.error('Error updating setup status:', error);
-    res.status(500).json({
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, message: 'Validation error', errors: error.issues });
+    }
+    return res.status(500).json({
       success: false,
       message: 'Internal server error'
     });
