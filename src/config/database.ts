@@ -54,11 +54,11 @@ pool.on('error', (err: any, client) => {
 });
 
 pool.on('acquire', (client) => {
-  console.log(`🔗 Client acquired from pool. Pool stats: ${pool.totalCount} total, ${pool.idleCount} idle, ${pool.waitingCount} waiting`);
+  // console.log(`🔗 Client acquired from pool. Pool stats: ${pool.totalCount} total, ${pool.idleCount} idle, ${pool.waitingCount} waiting`);
 });
 
 pool.on('remove', (client) => {
-  console.log(`🗑️ Client removed from pool. Pool stats: ${pool.totalCount} total, ${pool.idleCount} idle, ${pool.waitingCount} waiting`);
+  //console.log(`🗑️ Client removed from pool. Pool stats: ${pool.totalCount} total, ${pool.idleCount} idle, ${pool.waitingCount} waiting`);
 });
 
 // Retry function for database operations

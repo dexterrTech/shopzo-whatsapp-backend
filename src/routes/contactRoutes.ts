@@ -32,7 +32,7 @@ const router = Router();
  *         email:
  *           type: string
  *           format: email
- *           description: Contact's email address
+ *           description: Contact's email address (optional)
  *         whatsapp_number:
  *           type: string
  *           description: WhatsApp number (required, unique per user)
@@ -77,6 +77,7 @@ const router = Router();
  *         email:
  *           type: string
  *           format: email
+ *           description: Contact's email address (optional)
  *         whatsapp_number:
  *           type: string
  *         phone:
@@ -315,7 +316,7 @@ router.post("/", authenticateToken, async (req, res, next) => {
     const userId = req.user!.userId;
     const bodySchema = z.object({
       name: z.string().optional(),
-      email: z.string().email().optional(),
+      email: z.string().email().optional().or(z.literal("")).transform(val => val === "" ? undefined : val),
       whatsapp_number: z.string().min(1),
       phone: z.string().optional(),
       telegram_id: z.string().optional(),
@@ -390,7 +391,7 @@ router.put("/:id", authenticateToken, async (req, res, next) => {
 
     const bodySchema = z.object({
       name: z.string().optional(),
-      email: z.string().email().optional(),
+      email: z.string().email().optional().or(z.literal("")).transform(val => val === "" ? undefined : val),
       whatsapp_number: z.string().min(1).optional(),
       phone: z.string().optional(),
       telegram_id: z.string().optional(),
@@ -527,7 +528,7 @@ router.post("/import", authenticateToken, async (req, res, next) => {
       contacts: z.array(
         z.object({
           name: z.string().optional(),
-          email: z.string().email().optional(),
+          email: z.string().email().optional().or(z.literal("")).transform(val => val === "" ? undefined : val),
           whatsapp_number: z.string().min(1),
           phone: z.string().optional(),
           telegram_id: z.string().optional(),
