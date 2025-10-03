@@ -26,6 +26,7 @@ import { numericPort, env } from "./config/env";
 import { WebhookLoggingService } from "./services/webhookLoggingService";
 import { pool } from "./config/database";
 import { WalletService } from "./services/walletService";
+import { WebhookEventListenerService } from "./services/webhookEventListenerService";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/spec";
 import { initDatabase, checkDatabaseHealth } from "./config/database";
@@ -88,6 +89,35 @@ app.get("/api/health", async (_req, res) => {
     path: "/api/health",
     database: dbHealthy ? 'connected' : 'disconnected'
   });
+});
+
+// Webhook listener status endpoint
+app.get("/api/webhook-listener/status", (req, res) => {
+  const status = WebhookEventListenerService.getStatus();
+  res.json({ 
+    status: "OK", 
+    webhookListener: status,
+    timestamp: new Date().toISOString() 
+  });
+});
+
+// Manual trigger for webhook event processing (for testing)
+app.post("/api/webhook-listener/trigger", authenticateToken, (req, res) => {
+  try {
+    // Force process new webhook events
+    WebhookEventListenerService.processNewWebhookEvents();
+    res.json({ 
+      success: true, 
+      message: "Webhook event processing triggered",
+      timestamp: new Date().toISOString() 
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to trigger webhook event processing",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 // Test endpoint to check webhook data (no auth required)
@@ -536,6 +566,11 @@ async function startServer() {
       console.log('🔌 Initializing database connection...');
       await initDatabase();
       console.log("✅ Database initialized successfully");
+      
+      // Start webhook event listener after database is ready
+      console.log('🔄 Starting webhook event listener...');
+      WebhookEventListenerService.startListening(3000); // Poll every 3 seconds
+      console.log("✅ Webhook event listener started");
     } catch (error) {
       console.error('⚠️  Database initialization failed (continuing with fallback):', error);
       console.log('🔄 Will retry database connection in 30 seconds...');
@@ -555,4 +590,17 @@ async function startServer() {
 }
 
 startServer();
+
+// Graceful shutdown handling
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully...');
+  WebhookEventListenerService.stopListening();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully...');
+  WebhookEventListenerService.stopListening();
+  process.exit(0);
+});
 
