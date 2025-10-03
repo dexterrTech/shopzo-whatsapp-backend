@@ -4,8 +4,25 @@ import { withFallback } from "../utils/fallback";
 import { env } from "../config/env";
 import { authenticateToken } from "../middleware/authMiddleware";
 import { pool } from "../config/database";
+import multer from "multer";
 
 const router = Router();
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPG, PNG, and GIF images are allowed.'));
+    }
+  }
+});
 
 // Helper function to get user's WhatsApp setup
 async function getUserWhatsAppSetup(userId: number) {
@@ -513,6 +530,298 @@ router.post("/my-business-profile", authenticateToken, async (req, res, next) =>
     res.json(data);
   } catch (err) {
     console.error('Error in updateMyBusinessProfile route:', err);
+    if (err instanceof Error && err.message.includes('WhatsApp setup not completed')) {
+      return res.status(400).json({ 
+        error: err.message,
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+    // Return a proper error response instead of calling next(err)
+    return res.status(500).json({ 
+      error: true,
+      message: err instanceof Error ? err.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? err : undefined
+    });
+  }
+});
+
+/**
+ * @openapi
+ * /api/phone-numbers/upload-profile-picture:
+ *   post:
+ *     tags:
+ *       - Phone Numbers
+ *     summary: Upload Profile Picture
+ *     description: Upload a profile picture for the WhatsApp Business profile. Returns a media handle that can be used to update the profile.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Image file (JPG, PNG, GIF) - max 5MB
+ *     responses:
+ *       200:
+ *         description: Profile picture uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 media_handle:
+ *                   type: string
+ *                   description: Media handle to use in profile updates
+ *                 profile_picture_url:
+ *                   type: string
+ *                   description: Direct URL to the uploaded image
+ *       400:
+ *         description: Bad request - invalid file or setup not completed
+ *       401:
+ *         description: Authentication required
+ *       500:
+ *         description: Internal server error
+ */
+// POST /api/phone-numbers/upload-profile-picture - Upload profile picture
+router.post("/upload-profile-picture", authenticateToken, upload.single('file'), async (req, res, next) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    // Get user's WhatsApp setup
+    let setup;
+    try {
+      setup = await getUserWhatsAppSetup(userId);
+      console.log('WhatsApp setup found for user:', userId, setup);
+    } catch (setupError) {
+      console.error('Error getting WhatsApp setup:', setupError);
+      return res.status(400).json({ 
+        error: setupError instanceof Error ? setupError.message : 'Failed to get WhatsApp setup',
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+
+    // Check if file was uploaded
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const file = req.file;
+
+    const data = await withFallback({
+      feature: "uploadProfilePicture",
+      attempt: async () => {
+        console.log('Uploading profile picture using Facebook Graph API resumable upload');
+        
+        // Get business token for this user
+        const setupResult = await pool.query(
+          "SELECT business_token FROM whatsapp_setups WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+          [userId]
+        );
+        if (setupResult.rows.length === 0 || !setupResult.rows[0].business_token) {
+          throw new Error('WhatsApp setup not found or missing business token');
+        }
+        const businessToken: string = setupResult.rows[0].business_token;
+
+        // Step 1: Start upload session
+        const startUrl = `${env.FACEBOOK_GRAPH_API_BASE_URL}/v18.0/${env.APP_ID}/uploads`;
+        const startParams = new URLSearchParams();
+        startParams.set("file_name", file.originalname);
+        startParams.set("file_length", String(file.size));
+        startParams.set("file_type", file.mimetype);
+
+        const startResponse = await fetch(`${startUrl}?${startParams.toString()}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `OAuth ${businessToken}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!startResponse.ok) {
+          const errorText = await startResponse.text();
+          throw new Error(`Start upload failed: ${startResponse.status} ${startResponse.statusText} - ${errorText}`);
+        }
+
+        const startData = await startResponse.json();
+        const sessionId = startData.id.replace('upload:', '');
+
+        // Step 2: Upload the file
+        const uploadUrl = `${env.FACEBOOK_GRAPH_API_BASE_URL}/v18.0/upload:${sessionId}`;
+        const uploadResponse = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `OAuth ${businessToken}`,
+            'file_offset': '0'
+          },
+          body: new Uint8Array(file.buffer)
+        });
+
+        if (!uploadResponse.ok) {
+          const errorText = await uploadResponse.text();
+          throw new Error(`Upload failed: ${uploadResponse.status} ${uploadResponse.statusText} - ${errorText}`);
+        }
+
+        const uploadData = await uploadResponse.json();
+        console.log('Upload success response:', uploadData);
+        
+        return {
+          success: true,
+          media_handle: uploadData.h,
+          profile_picture_url: null // Will be available after profile update
+        };
+      },
+      fallback: () => {
+        console.log('Using fallback response for profile picture upload');
+        return {
+          success: true,
+          media_handle: "mock_media_handle_" + Date.now(),
+          profile_picture_url: null,
+          fallback: true
+        };
+      }
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error('Error in uploadProfilePicture route:', err);
+    if (err instanceof Error && err.message.includes('WhatsApp setup not completed')) {
+      return res.status(400).json({ 
+        error: err.message,
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+    // Return a proper error response instead of calling next(err)
+    return res.status(500).json({ 
+      error: true,
+      message: err instanceof Error ? err.message : 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? err : undefined
+    });
+  }
+});
+
+/**
+ * @openapi
+ * /api/phone-numbers/change-business-name:
+ *   post:
+ *     tags:
+ *       - Phone Numbers
+ *     summary: Change WhatsApp Business Name
+ *     description: Change the display name of the WhatsApp Business account. Requires PIN verification.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - pin
+ *             properties:
+ *               pin:
+ *                 type: string
+ *                 description: PIN code for verification
+ *                 example: "345464"
+ *     responses:
+ *       200:
+ *         description: Business name change initiated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: Bad request - invalid PIN or setup not completed
+ *       401:
+ *         description: Authentication required
+ *       500:
+ *         description: Internal server error
+ */
+// POST /api/phone-numbers/change-business-name - Change WhatsApp Business name
+router.post("/change-business-name", authenticateToken, async (req, res, next) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const { pin } = req.body;
+
+    // Validate PIN
+    if (!pin || typeof pin !== 'string' || pin.trim().length === 0) {
+      return res.status(400).json({ error: "PIN is required" });
+    }
+
+    // Get user's WhatsApp setup
+    let setup;
+    try {
+      setup = await getUserWhatsAppSetup(userId);
+      console.log('WhatsApp setup found for user:', userId, setup);
+    } catch (setupError) {
+      console.error('Error getting WhatsApp setup:', setupError);
+      return res.status(400).json({ 
+        error: setupError instanceof Error ? setupError.message : 'Failed to get WhatsApp setup',
+        code: 'WHATSAPP_SETUP_REQUIRED'
+      });
+    }
+
+    const data = await withFallback({
+      feature: "changeBusinessName",
+      attempt: async () => {
+        console.log('Changing business name via Interakt API for phone number:', setup.phone_number_id);
+        
+        const response = await fetch(`${env.INTERAKT_AMPED_EXPRESS_BASE_URL}/api/v17.0/${setup.phone_number_id}/register`, {
+          method: 'POST',
+          headers: {
+            'x-access-token': env.INTERAKT_ACCESS_TOKEN || '',
+            'x-waba-id': setup.waba_id,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            pin: pin.trim()
+          })
+        });
+
+        console.log('Interakt API response status:', response.status, response.statusText);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Interakt API error response:', errorText);
+          throw new Error(`Change business name API error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+
+        const responseData = await response.json();
+        console.log('Interakt API success response:', responseData);
+        
+        return {
+          success: true,
+          message: "Business name change request submitted successfully. The change will be reviewed by Meta and may take 24-48 hours to be approved."
+        };
+      },
+      fallback: () => {
+        console.log('Using fallback response for business name change');
+        return {
+          success: true,
+          message: "Business name change request submitted successfully. The change will be reviewed by Meta and may take 24-48 hours to be approved.",
+          fallback: true
+        };
+      }
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error('Error in changeBusinessName route:', err);
     if (err instanceof Error && err.message.includes('WhatsApp setup not completed')) {
       return res.status(400).json({ 
         error: err.message,
