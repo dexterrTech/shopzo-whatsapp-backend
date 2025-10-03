@@ -26,6 +26,105 @@ export class WebhookEventListenerService {
   private static readonly DEDUP_TTL_MS = 120000; // 2 minutes
   // Hold pending media per user phone awaiting confirmation
   private static pendingMediaByUser: Map<string, { mediaId: string; wabaId: string; phoneNumberId: string; ts: number }> = new Map();
+  // Deduplication cache for session messages to prevent duplicate responses
+  private static sentSessionMessages: Map<string, number> = new Map();
+  private static readonly SESSION_MSG_DEDUP_TTL_MS = 300000; // 5 minutes
+  // Deduplication cache for webhook events to prevent duplicate processing
+  private static processedWebhookEvents: Map<string, number> = new Map();
+  private static readonly WEBHOOK_DEDUP_TTL_MS = 60000; // 1 minute
+
+  /**
+   * Check if a session message has already been sent to prevent duplicates
+   */
+  private static hasSessionMessageBeenSent(userPhone: string, messageType: string): boolean {
+    const now = Date.now();
+    const key = `${userPhone}:${messageType}`;
+    
+    // Cleanup old entries
+    for (const [k, ts] of this.sentSessionMessages) {
+      if (now - ts > this.SESSION_MSG_DEDUP_TTL_MS) {
+        this.sentSessionMessages.delete(k);
+      }
+    }
+    
+    return this.sentSessionMessages.has(key);
+  }
+
+  /**
+   * Mark a session message as sent to prevent duplicates
+   */
+  private static markSessionMessageSent(userPhone: string, messageType: string): void {
+    const key = `${userPhone}:${messageType}`;
+    this.sentSessionMessages.set(key, Date.now());
+  }
+
+  /**
+   * Clear session message deduplication cache (useful for testing or manual reset)
+   */
+  static clearSessionMessageCache(): void {
+    this.sentSessionMessages.clear();
+    console.log('🧹 Session message deduplication cache cleared');
+  }
+
+  /**
+   * Clear webhook event deduplication cache (useful for testing or manual reset)
+   */
+  static clearWebhookEventCache(): void {
+    this.processedWebhookEvents.clear();
+    console.log('🧹 Webhook event deduplication cache cleared');
+  }
+
+  /**
+   * Clear all deduplication caches
+   */
+  static clearAllCaches(): void {
+    this.sentSessionMessages.clear();
+    this.processedWebhookEvents.clear();
+    this.processedMessageIdToTs.clear();
+    this.pendingMediaByUser.clear();
+    console.log('🧹 All deduplication caches cleared');
+  }
+
+  /**
+   * Get session message cache statistics for debugging
+   */
+  static getSessionMessageCacheStats(): { size: number; entries: Array<{ key: string; age: number }> } {
+    const now = Date.now();
+    const entries = Array.from(this.sentSessionMessages.entries()).map(([key, timestamp]) => ({
+      key,
+      age: now - timestamp
+    }));
+    
+    return {
+      size: this.sentSessionMessages.size,
+      entries
+    };
+  }
+
+  /**
+   * Check if a webhook event has already been processed to prevent duplicates
+   */
+  private static hasWebhookEventBeenProcessed(eventId: number, eventType: string): boolean {
+    const now = Date.now();
+    const key = `${eventId}:${eventType}`;
+    
+    // Cleanup old entries
+    for (const [k, ts] of this.processedWebhookEvents) {
+      if (now - ts > this.WEBHOOK_DEDUP_TTL_MS) {
+        this.processedWebhookEvents.delete(k);
+      }
+    }
+    
+    return this.processedWebhookEvents.has(key);
+  }
+
+  /**
+   * Mark a webhook event as processed to prevent duplicates
+   */
+  private static markWebhookEventProcessed(eventId: number, eventType: string): void {
+    const key = `${eventId}:${eventType}`;
+    this.processedWebhookEvents.set(key, Date.now());
+  }
 
   /**
    * Start listening for new webhook events
@@ -133,20 +232,36 @@ export class WebhookEventListenerService {
     try {
       console.log(`🔍 Processing webhook event ${event.id}: ${event.webhook_type} - ${event.http_method} ${event.request_url}`);
 
-      // Check if this is a campaign creation event
+      // Check for campaign creation events
       if (this.isCampaignCreationEvent(event)) {
+        if (this.hasWebhookEventBeenProcessed(event.id, 'campaign_creation')) {
+          console.log(`🔄 Campaign creation event ${event.id} already processed, skipping duplicate`);
+          return;
+        }
         console.log(`🎯 Campaign creation event detected: ${event.id}`);
         await this.handleCampaignCreationEvent(event);
+        this.markWebhookEventProcessed(event.id, 'campaign_creation');
+        return;
       }
 
       // Check if this is an incoming message with campaign command
       if (this.isIncomingMessageEvent(event)) {
+        if (this.hasWebhookEventBeenProcessed(event.id, 'incoming_message')) {
+          console.log(`🔄 Incoming message event ${event.id} already processed, skipping duplicate`);
+          return;
+        }
         console.log(`📨 Incoming campaign command message detected: ${event.id}`);
         const handled = await this.tryHandleTemplateSelection(event);
         if (!handled) {
           await this.handleIncomingMessageEvent(event);
         }
+        this.markWebhookEventProcessed(event.id, 'incoming_message');
+        return;
       } else if (this.hasAnyIncomingMessage(event)) {
+        if (this.hasWebhookEventBeenProcessed(event.id, 'any_incoming_message')) {
+          console.log(`🔄 Any incoming message event ${event.id} already processed, skipping duplicate`);
+          return;
+        }
         // If it's any incoming message (e.g., user replied with a template name), try to handle selection only
         const handled = await this.tryHandleTemplateSelection(event);
         if (!handled) {
@@ -156,12 +271,20 @@ export class WebhookEventListenerService {
             // Not valid selection and not image for media path; ignore
           }
         }
+        this.markWebhookEventProcessed(event.id, 'any_incoming_message');
+        return;
       }
 
       // Check if this is a message status event that might indicate user interaction
       if (event.webhook_type === 'message_status' && this.isUserInteractionEvent(event)) {
+        if (this.hasWebhookEventBeenProcessed(event.id, 'user_interaction')) {
+          console.log(`🔄 User interaction event ${event.id} already processed, skipping duplicate`);
+          return;
+        }
         console.log(`💬 User interaction event detected: ${event.id}`);
         await this.handleUserInteractionEvent(event);
+        this.markWebhookEventProcessed(event.id, 'user_interaction');
+        return;
       }
 
     } catch (error) {
@@ -402,16 +525,38 @@ export class WebhookEventListenerService {
     // Branches based on instruction flow
     const lc = candidate.toLowerCase();
     if (lc === 'show templates' || lc === 'show_templates' || lc === 'show templates'.toUpperCase() || lc === 'show_templates'.toUpperCase() || lc === 'SHOW_TEMPLATES') {
+      // Check if we've already sent template list to this user
+      const userPhone = SessionMessageService.extractUserPhoneFromWebhook(event.body_data);
+      if (userPhone && this.hasSessionMessageBeenSent(userPhone, 'template_list')) {
+        console.log(`🔄 Template list already sent to ${userPhone}, skipping duplicate`);
+        return true;
+      }
+      
       // List templates using existing flow
       await SessionMessageService.sendSessionMessageFromWebhook(event.body_data);
+      
+      if (userPhone) {
+        this.markSessionMessageSent(userPhone, 'template_list');
+      }
       return true;
     }
     if (lc === 'use media template' || lc === 'use_media_template' || lc === 'USE MEDIA TEMPLATE' || lc === 'USE_MEDIA_TEMPLATE') {
+      // Check if we've already sent media template prompt to this user
+      const userPhone = SessionMessageService.extractUserPhoneFromWebhook(event.body_data);
+      if (userPhone && this.hasSessionMessageBeenSent(userPhone, 'media_template_prompt')) {
+        console.log(`🔄 Media template prompt already sent to ${userPhone}, skipping duplicate`);
+        return true;
+      }
+      
       // Prompt for media
       await SessionMessageService.sendPlainSessionMessageFromWebhook(
         event.body_data,
         'Please send the image to use in the media template. Optionally, reply a caption after sending the image.'
       );
+      
+      if (userPhone) {
+        this.markSessionMessageSent(userPhone, 'media_template_prompt');
+      }
       return true;
     }
 
@@ -453,10 +598,20 @@ export class WebhookEventListenerService {
     // Send to contacts (not to the sender) based on WABA → user_id → contacts
     const bulk = await SessionMessageService.sendTemplateByNameToContactsUsingWebhook(event.body_data, candidate, 'en');
     if (bulk.ok && bulk.sent > 0) {
+      const userPhone = SessionMessageService.extractUserPhoneFromWebhook(event.body_data);
+      if (userPhone && this.hasSessionMessageBeenSent(userPhone, 'campaign_success')) {
+        console.log(`🔄 Campaign success message already sent to ${userPhone}, skipping duplicate`);
+        return true;
+      }
+      
       await SessionMessageService.sendSessionMessageFromWebhook(
         event.body_data,
         `Campaign sent successfully to ${bulk.sent} contact(s).`
       );
+      
+      if (userPhone) {
+        this.markSessionMessageSent(userPhone, 'campaign_success');
+      }
       return true;
     }
     return false;
@@ -503,14 +658,24 @@ export class WebhookEventListenerService {
 
       // Extract user phone number from webhook data
       const userPhone = SessionMessageService.extractUserPhoneFromWebhook(event.body_data);
+      console.log(`📞 Extracted user phone: ${userPhone}`);
       
       if (!userPhone) {
         console.warn(`Could not extract user phone from incoming message event ${event.id}`);
+        console.log(`🔍 Webhook body data:`, JSON.stringify(event.body_data, null, 2));
+        return;
+      }
+
+      // Check if we've already sent a campaign command response to this user
+      if (this.hasSessionMessageBeenSent(userPhone, 'campaign_command')) {
+        console.log(`🔄 Campaign command response already sent to ${userPhone}, skipping duplicate`);
         return;
       }
 
       // If command: send only the instruction line and ask for action
       const instruction = 'All contacts from your dashboard have been selected.';
+      console.log(`📤 Attempting to send interactive buttons to ${userPhone}`);
+      
       // Send as interactive buttons
       let response = await SessionMessageService.sendInteractiveButtonsFromWebhook(
         event.body_data,
@@ -523,17 +688,21 @@ export class WebhookEventListenerService {
 
       if (response) {
         console.log(`✅ Session message sent using webhook data to ${userPhone} for command: "${messageText}"`);
+        this.markSessionMessageSent(userPhone, 'campaign_command');
         return;
       }
 
       // Fallback: Find user by phone number and use database setup
-      console.log(`🔄 Falling back to database lookup for user ${userPhone}`);
+      console.log(`🔄 Interactive buttons failed, falling back to database lookup for user ${userPhone}`);
       const userId = await SessionMessageService.findUserByPhoneNumber(userPhone);
       
       if (!userId) {
         console.warn(`Could not find user for phone number ${userPhone} in event ${event.id}`);
+        console.log(`🔍 Attempted phone number variations: ${userPhone}, +${userPhone}, ${userPhone.replace(/[^\d]/g, '')}`);
         return;
       }
+
+      console.log(`👤 Found user ID: ${userId} for phone: ${userPhone}`);
 
       // Send the campaign notification message using database setup
       response = await SessionMessageService.sendCampaignNotificationMessage(
@@ -543,6 +712,7 @@ export class WebhookEventListenerService {
 
       if (response) {
         console.log(`✅ Campaign notification sent to user ${userId} (${userPhone}) for command: "${messageText}"`);
+        this.markSessionMessageSent(userPhone, 'campaign_command');
       } else {
         console.warn(`❌ Failed to send campaign notification to user ${userId} (${userPhone}) for event ${event.id}`);
       }
