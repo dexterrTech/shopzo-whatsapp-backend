@@ -344,6 +344,11 @@ router.post("/send", authenticateToken, async (req, res) => {
         name: z.string().optional().default(''),
         address: z.string().optional().default('')
       }).optional(),
+      // Advanced: Limited Time Offer/coupon/URL buttons
+      limitedTimeOfferExpirationMs: z.number().optional(),
+      couponCode: z.string().optional(),
+      urlButtonTextParam: z.string().optional(),
+      urlButtonIndex: z.coerce.number().int().min(0).optional(),
     }).refine((b) => (b.phoneNumbers && b.phoneNumbers.length) || (b.contactIds && b.contactIds.length), {
       message: 'Provide phoneNumbers or contactIds'
     });
@@ -559,7 +564,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               template: {
                 name: templateName,
                 language: {
-                  code: body.languageCode.split('_')[0] // Convert 'en_US' to 'en'
+                  code: body.languageCode // Use full locale like 'en_US' when provided
                 }
               }
             };
@@ -789,6 +794,44 @@ router.post("/send", authenticateToken, async (req, res) => {
                 parameters: sanitizedParams.map((txt) => ({ type: 'text', text: txt }))
               });
             }
+            // LIMITED_TIME_OFFER parameter
+            if (typeof (body as any).limitedTimeOfferExpirationMs === 'number') {
+              builtComponents.push({
+                type: 'limited_time_offer',
+                parameters: [
+                  {
+                    type: 'limited_time_offer',
+                    limited_time_offer: { expiration_time_ms: (body as any).limitedTimeOfferExpirationMs }
+                  }
+                ]
+              });
+            }
+
+            // COPY_CODE button
+            if ((body as any).couponCode && String((body as any).couponCode).trim().length > 0) {
+              builtComponents.push({
+                type: 'button',
+                sub_type: 'copy_code',
+                index: 0,
+                parameters: [
+                  { type: 'coupon_code', coupon_code: String((body as any).couponCode).trim() }
+                ]
+              });
+            }
+
+            // URL button
+            if ((body as any).urlButtonTextParam && String((body as any).urlButtonTextParam).trim().length > 0) {
+              const idx = typeof (body as any).urlButtonIndex === 'number' ? (body as any).urlButtonIndex : 1;
+              builtComponents.push({
+                type: 'button',
+                sub_type: 'url',
+                index: idx,
+                parameters: [
+                  { type: 'text', text: String((body as any).urlButtonTextParam).trim() }
+                ]
+              });
+            }
+
             if (builtComponents.length > 0) {
               (messagePayload.template as any).components = builtComponents;
             }
@@ -800,7 +843,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               payload: messagePayload,
               templateName: templateName,
               languageCode: body.languageCode,
-              languageCodeFormatted: body.languageCode.split('_')[0],
+              languageCodeFormatted: body.languageCode,
               phoneNumberId: phoneNumberId,
               wabaId: wabaId,
               headers: {
@@ -810,7 +853,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               }
             });
             
-            const interaktResponse = await fetch(
+            let interaktResponse = await fetch(
               `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
               {
                 method: 'POST',
@@ -840,6 +883,39 @@ router.post("/send", authenticateToken, async (req, res) => {
               // If response is not JSON, use the text content
               console.log('Debug - Interakt Error Text:', responseText);
               interaktData = { error: responseText };
+            }
+
+            // Fallback: If URL button does not require parameters, retry without URL button parameters
+            const urlNoParamsError = typeof interaktData?.error?.error_data?.details === 'string'
+              && interaktData.error.error_data.details.toLowerCase().includes('url does not require parameters');
+            if (!interaktResponse.ok && urlNoParamsError) {
+              try {
+                const cloned = JSON.parse(JSON.stringify(messagePayload));
+                if (Array.isArray(cloned?.template?.components)) {
+                  cloned.template.components = cloned.template.components.filter((c: any) => {
+                    const t = String(c?.type || '').toLowerCase();
+                    const sub = String(c?.sub_type || '').toLowerCase();
+                    return !(t === 'button' && sub === 'url');
+                  });
+                }
+                console.log('Debug - Retrying without URL button parameters');
+                interaktResponse = await fetch(
+                  `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'x-access-token': accessToken,
+                      'x-waba-id': wabaId,
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(cloned)
+                  }
+                );
+                const retryText = await interaktResponse.text();
+                try { interaktData = JSON.parse(retryText); } catch { interaktData = { raw: retryText }; }
+              } catch (e) {
+                console.log('Debug - Retry without URL button failed:', e);
+              }
             }
 
                        if (interaktResponse.ok && !interaktData.error) {
@@ -1264,7 +1340,7 @@ router.post("/cta", authenticateToken, async (req, res) => {
         type: "template",
         template: {
           name: body.templateName,
-          language: { code: body.languageCode.split("_")[0] },
+          language: { code: body.languageCode },
         },
       };
 

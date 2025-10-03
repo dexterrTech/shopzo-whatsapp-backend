@@ -240,6 +240,15 @@ router.post("/send-template", async (req, res, next) => {
         name: z.string(),
         address: z.string(),
       }).optional(),
+      // Header media id for IMAGE header templates
+      headerImageId: z.string().optional(),
+      // Limited time offer expiration in ms since epoch
+      limitedTimeOfferExpirationMs: z.number().optional(),
+      // Coupon code for COPY_CODE button
+      couponCode: z.string().optional(),
+      // URL button dynamic text parameter and optional explicit index override
+      urlButtonTextParam: z.string().optional(),
+      urlButtonIndex: z.number().optional(),
     }).refine((b) => (b.contactIds && b.contactIds.length) || (b.phoneNumbers && b.phoneNumbers.length), {
       message: 'Provide at least one of contactIds or phoneNumbers'
     });
@@ -329,9 +338,12 @@ router.post("/send-template", async (req, res, next) => {
         const perRecipientParams = await resolveParamsForContact(contactId);
         const components: any[] = [];
         
-        // Add location header if template has location header and location parameters provided
-        const hasLocationHeader = template.components?.some((comp: any) => 
+        // Detect header formats present in template
+        const hasLocationHeader = template.components?.some((comp: any) =>
           comp.type === "HEADER" && comp.format === "LOCATION"
+        );
+        const hasImageHeader = template.components?.some((comp: any) =>
+          comp.type === "HEADER" && comp.format === "IMAGE"
         );
         
         if (hasLocationHeader && body.locationParameters) {
@@ -349,6 +361,16 @@ router.post("/send-template", async (req, res, next) => {
               }
             ]
           });
+        } else if (hasImageHeader && body.headerImageId) {
+          components.push({
+            type: "header",
+            parameters: [
+              {
+                type: "image",
+                image: { id: body.headerImageId }
+              }
+            ]
+          });
         }
         
         // Add body parameters if available
@@ -357,6 +379,59 @@ router.post("/send-template", async (req, res, next) => {
             type: "body",
             parameters: perRecipientParams.map((text) => ({ type: "text", text })),
           });
+        }
+
+        // LIMITED_TIME_OFFER support
+        const hasLimitedTimeOffer = template.components?.some((comp: any) => comp.type === "LIMITED_TIME_OFFER");
+        if (hasLimitedTimeOffer && typeof body.limitedTimeOfferExpirationMs === 'number') {
+          components.push({
+            type: "limited_time_offer",
+            parameters: [
+              {
+                type: "limited_time_offer",
+                limited_time_offer: {
+                  expiration_time_ms: body.limitedTimeOfferExpirationMs,
+                },
+              },
+            ],
+          });
+        }
+
+        // Buttons support: COPY_CODE and URL
+        const buttonsDef: any[] = (template.components || []).find((c: any) => c.type === "BUTTONS")?.buttons || [];
+        if (Array.isArray(buttonsDef) && buttonsDef.length) {
+          // COPY_CODE button
+          const copyIdx = buttonsDef.findIndex((b: any) => String(b.type).toUpperCase() === "COPY_CODE");
+          if (copyIdx >= 0 && body.couponCode) {
+            components.push({
+              type: "button",
+              sub_type: "copy_code",
+              index: copyIdx,
+              parameters: [
+                {
+                  type: "coupon_code",
+                  coupon_code: body.couponCode,
+                },
+              ],
+            });
+          }
+
+          // URL button
+          const urlIdxInTpl = buttonsDef.findIndex((b: any) => String(b.type).toUpperCase() === "URL");
+          const urlIndex = typeof body.urlButtonIndex === 'number' ? body.urlButtonIndex : urlIdxInTpl;
+          if (urlIndex >= 0 && body.urlButtonTextParam) {
+            components.push({
+              type: "button",
+              sub_type: "url",
+              index: urlIndex,
+              parameters: [
+                {
+                  type: "text",
+                  text: body.urlButtonTextParam,
+                },
+              ],
+            });
+          }
         }
 
         const payload: any = {

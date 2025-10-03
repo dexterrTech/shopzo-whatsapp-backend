@@ -465,6 +465,44 @@ router.post('/send-test-message', authenticateToken, async (req, res) => {
       WHERE user_id = $1
     `, [userId]);
 
+    // After setup is completed, notify external provision API with waba_exchange
+    try {
+      const setupRow = await pool.query(
+        'SELECT phone_number_id, waba_id FROM whatsapp_setups WHERE user_id = $1 LIMIT 1',
+        [userId]
+      );
+      const phoneNumberIdForExchange: string | undefined = setupRow.rows?.[0]?.phone_number_id;
+      const settingsWabaId: string | undefined = setupRow.rows?.[0]?.waba_id;
+
+      // Fetch user email
+      const userRow = await pool.query('SELECT email FROM users_whatsapp WHERE id = $1 LIMIT 1', [userId]);
+      const userEmail: string | undefined = userRow.rows?.[0]?.email;
+
+      if (userEmail && phoneNumberIdForExchange && settingsWabaId) {
+        const url = 'https://api-dashboard.shopzo.app/api/business/provision/';
+        const headers: Record<string, string> = {
+          'accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-Exchange-Credentials-Secret': 'Dexterr@2492025',
+        };
+        const payload = {
+          type: 'waba_exchange',
+          email: userEmail,
+          phone_number_id: phoneNumberIdForExchange,
+          settings_waba_id: settingsWabaId,
+        };
+        try {
+          await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+        } catch (e) {
+          console.warn('[waba_exchange] Failed to notify external API:', (e as any)?.message || e);
+        }
+      } else {
+        console.warn('[waba_exchange] Missing fields to notify external API', { userEmail: !!userEmail, phoneNumberIdForExchange, settingsWabaId });
+      }
+    } catch (e) {
+      console.warn('[waba_exchange] Error while preparing exchange notification:', (e as any)?.message || e);
+    }
+
     res.json({ success: true, message: 'Test message processed. Setup completed!' });
   } catch (error) {
     if (error instanceof z.ZodError) {

@@ -137,6 +137,56 @@ router.post("/interaktWebhook", async (req, res) => {
           if (change.value?.messages) {
             // Handle incoming messages
             console.log("Interakt incoming message:", change.value.messages);
+
+            try {
+              const messages = change.value.messages as any[];
+              const phoneNumberIdInMeta: string | undefined = change?.value?.metadata?.phone_number_id;
+              // Resolve WABA/phone context
+              let settingsWabaId: string | undefined = change?.value?.metadata?.waba_id || change?.value?.metadata?.wabaId;
+
+              if (!settingsWabaId && phoneNumberIdInMeta) {
+                try {
+                  const r = await pool.query('SELECT waba_id FROM whatsapp_setups WHERE phone_number_id = $1 LIMIT 1', [phoneNumberIdInMeta]);
+                  settingsWabaId = r.rows?.[0]?.waba_id;
+                } catch (e) {
+                  console.warn('Failed to resolve waba_id from phone_number_id:', phoneNumberIdInMeta, e);
+                }
+              }
+
+              for (const msg of messages) {
+                const text: string | undefined = msg?.text?.body;
+                if (!text) continue;
+                const normalized = text.trim().toLowerCase();
+
+                let deliveryPlatform: 'WHATSAPP' | 'BOTH' | 'PRINT' | undefined;
+                if (normalized === '/whatsapp') deliveryPlatform = 'WHATSAPP';
+                if (normalized === '/both') deliveryPlatform = 'BOTH';
+                if (normalized === '/print') deliveryPlatform = 'PRINT';
+
+                if (deliveryPlatform) {
+                  // Send settings_update to external endpoint
+                  const url = 'https://api-dashboard.shopzo.app/api/business/provision/';
+                  const headers: Record<string, string> = {
+                    'accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Exchange-Credentials-Secret': 'Dexterr@2492025',
+                  };
+                  const payload: any = {
+                    type: 'settings_update',
+                    settings_waba_id: settingsWabaId || undefined,
+                    delivery_platform: deliveryPlatform,
+                  };
+                  try {
+                    await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+                    console.log('[settings_update] Sent', payload);
+                  } catch (e) {
+                    console.warn('[settings_update] Failed to notify external API:', (e as any)?.message || e);
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('Error while processing incoming message for settings update:', (e as any)?.message || e);
+            }
           }
           if (change.value?.statuses) {
             // Handle message status updates for settlement from suspense
