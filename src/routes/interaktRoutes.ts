@@ -11,6 +11,9 @@ import { WebhookLoggingService } from "../services/webhookLoggingService";
 
 const router = Router();
 
+// Constants
+const BUSINESS_PROVISION_URL = 'https://api-dashboard.shopzo.app/api/business/message/webhook/';
+
 /**
  * @openapi
  * tags:
@@ -136,7 +139,7 @@ router.post("/interaktWebhook", async (req, res) => {
         entry.changes?.forEach(async (change: any) => {
           if (change.value?.messages) {
             // Handle incoming messages
-            console.log("Interakt incoming message:", change.value.messages);
+            console.log("[Webhook] incoming messages payload:", JSON.stringify(change.value, null, 2));
 
             try {
               const messages = change.value.messages as any[];
@@ -148,6 +151,7 @@ router.post("/interaktWebhook", async (req, res) => {
                 try {
                   const r = await pool.query('SELECT waba_id FROM whatsapp_setups WHERE phone_number_id = $1 LIMIT 1', [phoneNumberIdInMeta]);
                   settingsWabaId = r.rows?.[0]?.waba_id;
+                  console.log('[Webhook] resolved settings_waba_id from DB:', settingsWabaId);
                 } catch (e) {
                   console.warn('Failed to resolve waba_id from phone_number_id:', phoneNumberIdInMeta, e);
                 }
@@ -155,30 +159,44 @@ router.post("/interaktWebhook", async (req, res) => {
 
               for (const msg of messages) {
                 const text: string | undefined = msg?.text?.body;
+                console.log('[Webhook] received message text:', text);
                 if (!text) continue;
-                const normalized = text.trim().toLowerCase();
+                const normalized = String(text).trim().toLowerCase();
+                console.log('[Webhook] normalized text:', normalized);
 
                 let deliveryPlatform: 'WHATSAPP' | 'BOTH' | 'PRINT' | undefined;
                 if (normalized === '/whatsapp') deliveryPlatform = 'WHATSAPP';
                 if (normalized === '/both') deliveryPlatform = 'BOTH';
                 if (normalized === '/print') deliveryPlatform = 'PRINT';
+                console.log('[Webhook] deliveryPlatform detected:', deliveryPlatform);
 
                 if (deliveryPlatform) {
                   // Send settings_update to external endpoint
-                  const url = 'https://api-dashboard.shopzo.app/api/business/provision/';
+                  const url = BUSINESS_PROVISION_URL;
                   const headers: Record<string, string> = {
                     'accept': 'application/json',
                     'Content-Type': 'application/json',
                     'X-Exchange-Credentials-Secret': 'Dexterr@2492025',
                   };
+                  const receiverDisplayPhoneNumber: string | undefined = change?.value?.metadata?.display_phone_number;
+                  const senderFrom: string | undefined =
+                    (msg && msg.from) ||
+                    (change?.value?.contacts && Array.isArray(change.value.contacts) && change.value.contacts[0]?.wa_id) ||
+                    change?.value?.metadata?.sender_mobile ||
+                    undefined;
                   const payload: any = {
                     type: 'settings_update',
                     settings_waba_id: settingsWabaId || undefined,
+                    phone_number_id: phoneNumberIdInMeta || undefined,
+                    sender_mobile: senderFrom,
                     delivery_platform: deliveryPlatform,
+                    command_text: text
                   };
+                  console.log('[settings_update] POST to', url, 'payload:', payload);
                   try {
-                    await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
-                    console.log('[settings_update] Sent', payload);
+                    const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+                    const respText = await resp.text();
+                    console.log('[settings_update] Response status:', resp.status, 'body:', respText);
                   } catch (e) {
                     console.warn('[settings_update] Failed to notify external API:', (e as any)?.message || e);
                   }

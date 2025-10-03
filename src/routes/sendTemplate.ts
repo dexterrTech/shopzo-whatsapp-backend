@@ -8,6 +8,89 @@ import { env } from "../config/env";
 
 const router = Router();
 
+// Utility functions for building template components
+const buildHeaderComponent = (headerMedia: any) => {
+  const mediaType = headerMedia.type; // image | video | document
+  const mediaPayload: any = {};
+  if (headerMedia.id) mediaPayload.id = headerMedia.id;
+  if (headerMedia.link) mediaPayload.link = headerMedia.link;
+  return {
+    type: 'header',
+    parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
+  };
+};
+
+const buildLocationHeaderComponent = (locationParameters: any) => {
+  return {
+    type: 'header',
+    parameters: [{
+      type: 'location',
+      location: {
+        latitude: locationParameters.latitude,
+        longitude: locationParameters.longitude,
+        name: locationParameters.name || '',
+        address: locationParameters.address || ''
+      }
+    }]
+  };
+};
+
+const buildBodyComponent = (resolvedBodyParams: string[]) => {
+  const processedParams = Array.from({ length: resolvedBodyParams.length }, (_, idx) => {
+    const v = (resolvedBodyParams as any)[idx];
+    if (v === null || v === undefined) return '';
+    const s = typeof v === 'string' ? v : String(v);
+    return s;
+  });
+  
+  const sanitizedParams = processedParams.map((txt) => {
+    const raw = typeof txt === 'string' ? txt : '';
+    const isConst = raw.startsWith('CONST:');
+    const val = isConst ? raw.replace(/^CONST:/, '') : raw;
+    const t = val.trim();
+    return t.length > 0 ? t : '-';
+  });
+  
+  return {
+    type: 'body',
+    parameters: sanitizedParams.map((txt) => ({ type: 'text', text: txt }))
+  };
+};
+
+const buildLimitedTimeOfferComponent = (expirationMs: number) => {
+  return {
+    type: 'limited_time_offer',
+    parameters: [
+      {
+        type: 'limited_time_offer',
+        limited_time_offer: { expiration_time_ms: expirationMs }
+      }
+    ]
+  };
+};
+
+const buildCopyCodeButtonComponent = (couponCode: string, index: number = 0) => {
+  return {
+    type: 'button',
+    sub_type: 'copy_code',
+    index: index,
+    parameters: [
+      { type: 'coupon_code', coupon_code: couponCode }
+    ]
+  };
+};
+
+const buildUrlButtonComponent = (textParam: string, index: number = 1) => {
+  return {
+    type: 'button',
+    sub_type: 'url',
+    index: index,
+    parameters: [
+      { type: 'text', text: textParam }
+    ]
+  };
+};
+
 // Types for campaign and message tracking
 export interface Campaign {
   id: string;
@@ -115,7 +198,7 @@ router.post("/campaigns", authenticateToken, async (req, res) => {
       });
     }
 
-    const bodySchema = z.object({
+    const campaignSchema = z.object({
       name: z.string().min(1),
       trigger: z.enum(["IMMEDIATE", "SCHEDULED"]),
       audienceType: z.enum(["ALL", "SEGMENTED", "QUICK"]),
@@ -126,7 +209,7 @@ router.post("/campaigns", authenticateToken, async (req, res) => {
       scheduledAt: z.string().optional(),
     });
 
-    const body = bodySchema.parse(req.body);
+    const body = campaignSchema.parse(req.body);
 
     // Validate required fields based on message type
     if (body.messageType === "TEMPLATE" && !body.templateId) {
@@ -291,7 +374,7 @@ router.post("/send", authenticateToken, async (req, res) => {
       });
     }
 
-    const bodySchema = z.object({
+    const sendTemplateSchema = z.object({
       campaignId: z.string().optional(),
       phoneNumbers: z.array(z.string()).optional(),
       contactIds: z.array(z.string()).optional(),
@@ -353,7 +436,7 @@ router.post("/send", authenticateToken, async (req, res) => {
       message: 'Provide phoneNumbers or contactIds'
     });
 
-    const body = bodySchema.parse(req.body);
+    const body = sendTemplateSchema.parse(req.body);
 
            // Get user's WhatsApp setup from database
        const client = await pool.connect();
@@ -375,12 +458,7 @@ router.post("/send", authenticateToken, async (req, res) => {
          const phoneNumberId = setupResult.rows[0].phone_number_id;
          const accessToken = env.INTERAKT_ACCESS_TOKEN;
 
-                console.log('Debug - WhatsApp Setup:', {
-           wabaId: wabaId,
-           phoneNumberId: phoneNumberId,
-           accessTokenExists: !!accessToken,
-           userId: userId
-         });
+        // WhatsApp setup validated successfully
 
              if (!accessToken) {
          return res.status(500).json({
@@ -448,7 +526,7 @@ router.post("/send", authenticateToken, async (req, res) => {
           }
         }
       } catch (e) {
-        console.log('Debug - Campaign template category lookup failed (continuing):', e);
+        // Template category lookup failed, continuing with default
       }
       if (!detectedCategory) {
         try {
@@ -464,12 +542,12 @@ router.post("/send", authenticateToken, async (req, res) => {
             else detectedCategory = 'utility';
           }
         } catch (e) {
-          console.log('Debug - DB template category lookup failed (continuing):', e);
+          // DB template category lookup failed, continuing with default
         }
       }
 
       // First, let's check the template status from Interakt
-      console.log('Debug - Checking template status for:', templateName);
+      // Checking template status from Interakt
       try {
         const templateCheckResponse = await fetch(
           `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/message_templates`,
@@ -485,18 +563,13 @@ router.post("/send", authenticateToken, async (req, res) => {
 
         if (templateCheckResponse.ok) {
           const templateData = await templateCheckResponse.json();
-          console.log('Debug - Available templates:', JSON.stringify(templateData, null, 2));
+          // Template data retrieved from Interakt
           
           // Find our specific template (support multiple possible response shapes)
           const list = (templateData?.data?.data) || templateData?.data || templateData?.templates || [];
           const ourTemplate = Array.isArray(list) ? list.find((t: any) => t?.name === templateName) : undefined;
           if (ourTemplate) {
-            console.log('Debug - Our template status:', {
-              name: ourTemplate.name,
-              status: ourTemplate.status,
-              category: ourTemplate.category,
-              language: ourTemplate.language
-            });
+            // Template found and status checked
             if (!detectedCategory) {
               const cat = String(ourTemplate.category || '').toLowerCase();
               if (cat.includes('market')) detectedCategory = 'marketing';
@@ -505,13 +578,13 @@ router.post("/send", authenticateToken, async (req, res) => {
               else detectedCategory = 'utility';
             }
           } else {
-            console.log('Debug - Template not found in available templates');
+            // Template not found in available templates
           }
         } else {
-          console.log('Debug - Failed to fetch templates:', templateCheckResponse.status, templateCheckResponse.statusText);
+          // Failed to fetch templates from Interakt
         }
       } catch (error) {
-        console.log('Debug - Error checking template status:', error);
+        // Error checking template status
       }
 
       const results = [];
@@ -569,7 +642,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               }
             };
 
-            console.log('Debug - Full message payload:', JSON.stringify(messagePayload, null, 2));
+            // Message payload prepared
 
             if (body.parameters && body.parameters.length > 0) {
               (messagePayload.template as any).components = body.parameters;
@@ -623,23 +696,10 @@ router.post("/send", authenticateToken, async (req, res) => {
                 }
               }
               if (resolvedBodyParams && resolvedBodyParams.length > 0) {
-                const denseParams = Array.from({ length: resolvedBodyParams.length }, (_, idx) => {
-                  const v = (resolvedBodyParams as any)[idx];
-                  if (v === null || v === undefined) return '';
-                  const s = typeof v === 'string' ? v : String(v);
-                  return s;
-                });
-                const sanitizedParams = denseParams.map((txt) => {
-                  const raw = typeof txt === 'string' ? txt : '';
-                  const isConst = raw.startsWith('CONST:');
-                  const val = isConst ? raw.replace(/^CONST:/, '') : raw;
-                  const t = val.trim();
-                  return t.length > 0 ? t : '-';
-                });
-                builtComponents.push({
-                  type: 'BODY',
-                  parameters: sanitizedParams.map((txt) => ({ type: 'TEXT', text: txt }))
-                });
+                const bodyComponent = buildBodyComponent(resolvedBodyParams);
+                bodyComponent.type = 'BODY'; // Carousel uses uppercase
+                bodyComponent.parameters = bodyComponent.parameters.map((p: any) => ({ ...p, type: 'TEXT' })); // Carousel uses TEXT instead of text
+                builtComponents.push(bodyComponent);
               }
 
               // Add CAROUSEL component
@@ -695,36 +755,18 @@ router.post("/send", authenticateToken, async (req, res) => {
               });
 
               try {
-                console.log('Debug - Built carousel components:', JSON.stringify(builtComponents, null, 2));
+                // Carousel components built successfully
               } catch {}
               
               (messagePayload.template as any).components = builtComponents;
             } else {
               const builtComponents: any[] = [];
               if (body.headerMedia) {
-                const mediaType = body.headerMedia.type; // image | video | document
-                const mediaPayload: any = {};
-                if (body.headerMedia.id) mediaPayload.id = body.headerMedia.id;
-                if (body.headerMedia.link) mediaPayload.link = body.headerMedia.link;
-                builtComponents.push({
-                  type: 'header',
-                  parameters: [{ type: mediaType, [mediaType]: mediaPayload }]
-                });
+                builtComponents.push(buildHeaderComponent(body.headerMedia));
               }
               // LOCATION header
               if (body.locationParameters && typeof body.locationParameters.latitude === 'number' && typeof body.locationParameters.longitude === 'number') {
-                builtComponents.push({
-                  type: 'header',
-                  parameters: [{
-                    type: 'location',
-                    location: {
-                      latitude: body.locationParameters.latitude,
-                      longitude: body.locationParameters.longitude,
-                      name: body.locationParameters.name || '',
-                      address: body.locationParameters.address || ''
-                    }
-                  }]
-                });
+                builtComponents.push(buildLocationHeaderComponent(body.locationParameters));
               }
             // Resolve BODY parameters per recipient using variableMapping (preferred)
             // else fall back to uniform bodyParams
@@ -773,63 +815,22 @@ router.post("/send", authenticateToken, async (req, res) => {
               }
             }
             if (resolvedBodyParams && resolvedBodyParams.length > 0) {
-              // Densify sparse arrays and coerce null/undefined to empty strings
-              const denseParams = Array.from({ length: resolvedBodyParams.length }, (_, idx) => {
-                const v = (resolvedBodyParams as any)[idx];
-                if (v === null || v === undefined) return '';
-                const s = typeof v === 'string' ? v : String(v);
-                return s;
-              });
-              // Support CONST: prefix for literal constants
-              const sanitizedParams = denseParams.map((txt) => {
-                const raw = typeof txt === 'string' ? txt : '';
-                const isConst = raw.startsWith('CONST:');
-                const val = isConst ? raw.replace(/^CONST:/, '') : raw;
-                const t = val.trim();
-                // Interakt rejects missing text value; ensure non-empty fallback
-                return t.length > 0 ? t : '-';
-              });
-              builtComponents.push({
-                type: 'body',
-                parameters: sanitizedParams.map((txt) => ({ type: 'text', text: txt }))
-              });
+              builtComponents.push(buildBodyComponent(resolvedBodyParams));
             }
             // LIMITED_TIME_OFFER parameter
             if (typeof (body as any).limitedTimeOfferExpirationMs === 'number') {
-              builtComponents.push({
-                type: 'limited_time_offer',
-                parameters: [
-                  {
-                    type: 'limited_time_offer',
-                    limited_time_offer: { expiration_time_ms: (body as any).limitedTimeOfferExpirationMs }
-                  }
-                ]
-              });
+              builtComponents.push(buildLimitedTimeOfferComponent((body as any).limitedTimeOfferExpirationMs));
             }
 
             // COPY_CODE button
             if ((body as any).couponCode && String((body as any).couponCode).trim().length > 0) {
-              builtComponents.push({
-                type: 'button',
-                sub_type: 'copy_code',
-                index: 0,
-                parameters: [
-                  { type: 'coupon_code', coupon_code: String((body as any).couponCode).trim() }
-                ]
-              });
+              builtComponents.push(buildCopyCodeButtonComponent(String((body as any).couponCode).trim()));
             }
 
             // URL button
             if ((body as any).urlButtonTextParam && String((body as any).urlButtonTextParam).trim().length > 0) {
               const idx = typeof (body as any).urlButtonIndex === 'number' ? (body as any).urlButtonIndex : 1;
-              builtComponents.push({
-                type: 'button',
-                sub_type: 'url',
-                index: idx,
-                parameters: [
-                  { type: 'text', text: String((body as any).urlButtonTextParam).trim() }
-                ]
-              });
+              builtComponents.push(buildUrlButtonComponent(String((body as any).urlButtonTextParam).trim(), idx));
             }
 
             if (builtComponents.length > 0) {
@@ -838,20 +839,7 @@ router.post("/send", authenticateToken, async (req, res) => {
           }
 
                                              // Call Interakt API to send template message
-            console.log('Debug - Sending to Interakt:', {
-              url: `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
-              payload: messagePayload,
-              templateName: templateName,
-              languageCode: body.languageCode,
-              languageCodeFormatted: body.languageCode,
-              phoneNumberId: phoneNumberId,
-              wabaId: wabaId,
-              headers: {
-                'x-access-token': accessToken ? '***' : 'MISSING',
-                'x-waba-id': wabaId,
-                'Content-Type': 'application/json'
-              }
-            });
+            // Sending message to Interakt API
             
             let interaktResponse = await fetch(
               `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
@@ -866,11 +854,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               }
             );
 
-                     console.log('Debug - Interakt Response:', {
-             status: interaktResponse.status,
-             statusText: interaktResponse.statusText,
-             headers: Object.fromEntries(interaktResponse.headers.entries())
-           });
+            // Interakt API response received
            
                        let interaktData;
             // Read response body only once
@@ -878,10 +862,10 @@ router.post("/send", authenticateToken, async (req, res) => {
             
             try {
               interaktData = JSON.parse(responseText);
-              console.log('Debug - Interakt Response Data:', interaktData);
+              // Interakt response data parsed
             } catch (parseError) {
               // If response is not JSON, use the text content
-              console.log('Debug - Interakt Error Text:', responseText);
+              // Interakt error response received
               interaktData = { error: responseText };
             }
 
@@ -898,7 +882,7 @@ router.post("/send", authenticateToken, async (req, res) => {
                     return !(t === 'button' && sub === 'url');
                   });
                 }
-                console.log('Debug - Retrying without URL button parameters');
+                // Retrying without URL button parameters
                 interaktResponse = await fetch(
                   `https://amped-express.interakt.ai/api/v17.0/${phoneNumberId}/messages`,
                   {
@@ -914,7 +898,7 @@ router.post("/send", authenticateToken, async (req, res) => {
                 const retryText = await interaktResponse.text();
                 try { interaktData = JSON.parse(retryText); } catch { interaktData = { raw: retryText }; }
               } catch (e) {
-                console.log('Debug - Retry without URL button failed:', e);
+                // Retry without URL button failed
               }
             }
 
@@ -922,7 +906,7 @@ router.post("/send", authenticateToken, async (req, res) => {
               // Success - log message
               const messageId = interaktData.messages?.[0]?.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
               
-              console.log('Debug - Message sent successfully, checking delivery status for:', messageId);
+              // Message sent successfully, monitoring delivery status
               
               // Check message delivery status after a short delay
               setTimeout(async () => {
@@ -941,12 +925,12 @@ router.post("/send", authenticateToken, async (req, res) => {
                   
                   if (statusResponse.ok) {
                     const statusData = await statusResponse.json();
-                    console.log('Debug - Message delivery status:', JSON.stringify(statusData, null, 2));
+                    // Message delivery status checked
                   } else {
-                    console.log('Debug - Failed to check message status:', statusResponse.status);
+                    // Failed to check message status
                   }
                 } catch (error) {
-                  console.log('Debug - Error checking message status:', error);
+                  // Error checking message status
                 }
               }, 5000); // Check after 5 seconds
               
@@ -1286,7 +1270,7 @@ router.post("/cta", authenticateToken, async (req, res) => {
       return res.status(401).json({ success: false, message: "Authentication required" });
     }
 
-    const bodySchema = z.object({
+    const ctaTemplateSchema = z.object({
       to: z.string().min(5),
       templateName: z.string().min(1),
       languageCode: z.string().min(2),
@@ -1300,7 +1284,7 @@ router.post("/cta", authenticateToken, async (req, res) => {
       components: z.array(z.any()).optional(),
     });
 
-    const body = bodySchema.parse(req.body);
+    const body = ctaTemplateSchema.parse(req.body);
 
     // Get user's WhatsApp setup via ORM
     try {
@@ -1452,13 +1436,13 @@ router.get("/campaigns", authenticateToken, async (req, res) => {
       });
     }
 
-    const querySchema = z.object({
+    const campaignsQuerySchema = z.object({
       status: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(100).default(25),
       page: z.coerce.number().int().min(1).default(1),
     });
 
-    const query = querySchema.parse(req.query);
+    const query = campaignsQuerySchema.parse(req.query);
     const offset = (query.page - 1) * query.limit;
 
     const client = await pool.connect();
@@ -1635,13 +1619,13 @@ router.get("/messages", authenticateToken, async (req, res) => {
       });
     }
 
-    const querySchema = z.object({
+    const messagesQuerySchema = z.object({
       search: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(100).default(50),
       page: z.coerce.number().int().min(1).default(1),
     });
 
-    const query = querySchema.parse(req.query);
+    const query = messagesQuerySchema.parse(req.query);
     const offset = (query.page - 1) * query.limit;
 
     const client = await pool.connect();

@@ -13,81 +13,7 @@ const router = Router();
  *   description: Billing plans and conversation billing logs
  */
 
-// Debug endpoint to check current user
-router.get('/debug/user', authenticateToken, async (req, res) => {
-  try {
-    res.json({
-      user: req.user,
-      message: 'Current user info'
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Debug failed' });
-  }
-});
-
-// Debug endpoint to seed billing logs for current user
-router.post('/debug/seed-logs', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'User ID not found' });
-    }
-
-    // Sample billing logs data for current user
-    const sampleLogs = [
-      {
-        conversation_id: `wamid.${Date.now()}_1`,
-        user_id: userId,
-        category: 'utility',
-        recipient_number: '919373355199',
-        start_time: '2025-08-18 18:34:00',
-        end_time: '2025-08-18 18:34:00',
-        billing_status: 'paid',
-        amount_paise: 115,
-        amount_currency: 'INR',
-        country_code: '+91',
-        country_name: 'India'
-      },
-      {
-        conversation_id: `wamid.${Date.now()}_2`,
-        user_id: userId,
-        category: 'marketing',
-        recipient_number: '919876543210',
-        start_time: '2025-08-18 19:15:00',
-        end_time: '2025-08-18 19:20:00',
-        billing_status: 'pending',
-        amount_paise: 500,
-        amount_currency: 'INR',
-        country_code: '+91',
-        country_name: 'India'
-      }
-    ];
-
-    for (const log of sampleLogs) {
-      await pool.query(`
-        INSERT INTO billing_logs (
-          conversation_id, user_id, category, recipient_number, 
-          start_time, end_time, billing_status, amount_paise, 
-          amount_currency, country_code, country_name
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        ON CONFLICT (conversation_id) DO NOTHING
-      `, [
-        log.conversation_id, log.user_id, log.category, log.recipient_number,
-        log.start_time, log.end_time, log.billing_status, log.amount_paise,
-        log.amount_currency, log.country_code, log.country_name
-      ]);
-    }
-
-    res.json({ 
-      message: 'Billing logs seeded successfully for current user',
-      userId: userId,
-      logsAdded: sampleLogs.length
-    });
-  } catch (err) {
-    console.error('Error seeding logs:', err);
-    res.status(500).json({ error: 'Failed to seed logs' });
-  }
-});
+// Debug endpoints removed for production security
 
 // Super admin: get all price plans
 /**
@@ -766,18 +692,10 @@ router.get('/logs', authenticateToken, async (req, res, next) => {
 
     // Get total count
     const countQuery = `SELECT COUNT(*) FROM billing_logs bl ${whereClause}`;
-    console.log('Count query:', countQuery, 'Params:', params);
     const countResult = await pool.query(countQuery, params);
     const totalCount = parseInt(countResult.rows[0].count);
-    console.log('Total count:', totalCount);
     
-    // Debug: Check if billing_logs table exists and has any data
-    const tableCheck = await pool.query('SELECT COUNT(*) as total FROM billing_logs');
-    console.log('Total records in billing_logs table:', tableCheck.rows[0].total);
-    
-    // Debug: Check what users exist
-    const usersCheck = await pool.query('SELECT id, name, email FROM users_whatsapp LIMIT 5');
-    console.log('Available users:', usersCheck.rows);
+    // Check billing_logs table status
 
     // Get paginated results
     const offset = (query.page - 1) * query.limit;
