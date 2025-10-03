@@ -569,6 +569,13 @@ export class WebhookEventListenerService {
         await SessionMessageService.sendPlainSessionMessageFromWebhook(event.body_data, 'No pending image found. Please choose "Use media template" and send an image.');
         return true;
       }
+      // Dedup: avoid sending the same media-based campaign twice for the same user
+      const dedupKey = `media_send_${pending.mediaId}`;
+      if (this.hasSessionMessageBeenSent(userPhone, dedupKey)) {
+        console.log(`🔄 Duplicate media send detected for ${userPhone} (${pending.mediaId}), skipping`);
+        await SessionMessageService.sendPlainSessionMessageFromWebhook(event.body_data, 'Already processing your request. Please wait.');
+        return true;
+      }
       const result = await SessionMessageService.sendMediaTemplateWithMediaIdToContactsUsingWebhook(
         event.body_data,
         'shopzo_marketting_mansoon',
@@ -576,6 +583,7 @@ export class WebhookEventListenerService {
       );
       this.pendingMediaByUser.delete(userPhone);
       if (result.ok) {
+        this.markSessionMessageSent(userPhone, dedupKey);
         await SessionMessageService.sendPlainSessionMessageFromWebhook(event.body_data, `Campaign sent successfully to ${result.sent} contact(s).`);
       } else {
         await SessionMessageService.sendPlainSessionMessageFromWebhook(event.body_data, 'Failed to send campaign. Please try again.');
@@ -595,6 +603,17 @@ export class WebhookEventListenerService {
     const looksLikeTemplateName = /^[a-z0-9_\.\-]+$/i.test(candidate);
     if (!looksLikeTemplateName) return false;
 
+    // General dedup for template-name broadcasts: prevent multiple sends for same user+template within TTL
+    const userPhoneForTemplate = SessionMessageService.extractUserPhoneFromWebhook(event.body_data);
+    if (userPhoneForTemplate) {
+      const tplDedupKey = `template_send_${candidate.toLowerCase()}`;
+      if (this.hasSessionMessageBeenSent(userPhoneForTemplate, tplDedupKey)) {
+        console.log(`🔄 Duplicate template broadcast detected for ${userPhoneForTemplate} (${candidate}), skipping`);
+        await SessionMessageService.sendPlainSessionMessageFromWebhook(event.body_data, 'Already processing your request. Please wait.');
+        return true;
+      }
+    }
+
     // Send to contacts (not to the sender) based on WABA → user_id → contacts
     const bulk = await SessionMessageService.sendTemplateByNameToContactsUsingWebhook(event.body_data, candidate, 'en');
     if (bulk.ok && bulk.sent > 0) {
@@ -611,6 +630,10 @@ export class WebhookEventListenerService {
       
       if (userPhone) {
         this.markSessionMessageSent(userPhone, 'campaign_success');
+      }
+      if (userPhoneForTemplate) {
+        const tplDedupKey = `template_send_${candidate.toLowerCase()}`;
+        this.markSessionMessageSent(userPhoneForTemplate, tplDedupKey);
       }
       return true;
     }
